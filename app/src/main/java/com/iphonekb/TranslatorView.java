@@ -215,7 +215,7 @@ final class TranslatorView extends View {
         float base = cy - (tp.descent() + tp.ascent()) / 2;
         c.drawText(s, 0, s.length(), dp(16), base, tp);
         float caretX = dp(16) + (empty ? 0 : tp.measureText(s, 0, s.length())) + dp(1);
-        fill.setColor(theme.accent);
+        fill.setColor(theme.accentInk);
         c.drawRect(caretX, cy - dp(10), caretX + dp(2), cy + dp(10), fill);
 
         fill.setColor(theme.separator);

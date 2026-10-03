@@ -1075,13 +1075,13 @@ final class KeyboardView extends View {
                 c.drawRect(menuRect.left + dp(16), top, menuRect.right - dp(16), top + Math.max(1f, dp(0.5f)), fill);
             }
             boolean other = i == langItems.length;
-            int col = sel ? theme.accentText : (other ? theme.accent : theme.text);
+            int col = sel ? theme.accentText : (other ? theme.accentInk : theme.text);
             text.setColor(alpha(col, t));
             float base = top + menuRowH / 2 - (text.descent() + text.ascent()) / 2;
             c.drawText(menuItems[i], menuRect.left + dp(16), base, text);
             if (i == langCurrent && !other) {
                 text.setTextAlign(Paint.Align.RIGHT);
-                text.setColor(alpha(sel ? theme.accentText : theme.accent, t));
+                text.setColor(alpha(sel ? theme.accentText : theme.accentInk, t));
                 c.drawText("✓", menuRect.right - dp(16), base, text);
                 text.setTextAlign(Paint.Align.LEFT);
             }

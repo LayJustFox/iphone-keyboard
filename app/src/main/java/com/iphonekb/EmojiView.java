@@ -152,18 +152,21 @@ final class EmojiView extends View {
         animate().cancel();
         setVisibility(VISIBLE);
         setAlpha(0f);
-        setTranslationY(dp(44));
-        setScaleX(0.96f);
-        setScaleY(0.96f);
-        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(430)
-                .setInterpolator(EASE_OUT).start();
+        // Settles in like an iOS sheet: from slightly larger and lower, fading in.
+        setPivotX(getWidth() / 2f);
+        setPivotY(getHeight());
+        setTranslationY(dp(18));
+        setScaleX(1.06f);
+        setScaleY(1.06f);
+        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(460)
+                .setInterpolator(EmojiView.EASE_OUT).start();
     }
 
     void hide() {
         if (getVisibility() != VISIBLE) return;
         animate().cancel();
-        animate().alpha(0f).translationY(dp(44)).scaleX(0.96f).scaleY(0.96f).setDuration(270)
-                .setInterpolator(EASE_IN)
+        animate().alpha(0f).translationY(dp(14)).scaleX(1.04f).scaleY(1.04f).setDuration(300)
+                .setInterpolator(EmojiView.EASE_OUT)
                 .withEndAction(new Runnable() {
                     @Override
                     public void run() {

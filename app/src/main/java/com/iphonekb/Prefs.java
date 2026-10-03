@@ -22,6 +22,7 @@ final class Prefs {
 
     /** Accent colours (iOS system colours): name, light, dark. */
     static final String[][] ACCENTS = {
+            {"white", "#FFFFFF", "#FFFFFF"},
             {"blue", "#007AFF", "#0A84FF"},
             {"indigo", "#5856D6", "#5E5CE6"},
             {"purple", "#AF52DE", "#BF5AF2"},
@@ -93,6 +94,10 @@ final class Prefs {
             // One-time: background and keys at 50% transparency.
             sp.edit().putInt("glass_transparency", 50).putInt("key_transparency", 50)
                     .putBoolean("m_transparency50", true).apply();
+        }
+        if (!sp.getBoolean("m_accent_white", false)) {
+            // One-time: white accent (switches, sliders, return key).
+            sp.edit().putString("accent", "white").putBoolean("m_accent_white", true).apply();
         }
         String raw = sp.getString("langs", "ru,en");
         ArrayList<String> list = new ArrayList<>();

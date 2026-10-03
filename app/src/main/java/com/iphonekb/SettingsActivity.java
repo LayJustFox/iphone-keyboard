@@ -87,6 +87,12 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         return prefs.accentColor(dark);
     }
 
+    /** Accent for text (white accent becomes dark text on light pages). */
+    private int accentInk() {
+        int a = accent();
+        return Theme.isLight(a) && !dark ? label() : a;
+    }
+
     // ---------------------------------------------------------------- lifecycle
 
     @Override
@@ -183,7 +189,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
             TextView back = new TextView(this);
             back.setText("‹ Назад");
             back.setTextSize(17);
-            back.setTextColor(accent());
+            back.setTextColor(accentInk());
             back.setGravity(Gravity.CENTER_VERTICAL);
             back.setPadding(dp(8), 0, dp(16), 0);
             back.setOnClickListener(new View.OnClickListener() {
@@ -263,13 +269,13 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         status.setTextColor(label());
         status.setPadding(dp(16), dp(12), dp(16), dp(12));
         addRow(setup, status, 16);
-        action(setup, "Включить клавиатуру", accent(), new Runnable() {
+        action(setup, "Включить клавиатуру", accentInk(), new Runnable() {
             @Override
             public void run() {
                 startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS));
             }
         });
-        action(setup, "Выбрать её как основную", accent(), new Runnable() {
+        action(setup, "Выбрать её как основную", accentInk(), new Runnable() {
             @Override
             public void run() {
                 InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
@@ -399,7 +405,8 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
             GradientDrawable g = new GradientDrawable();
             g.setShape(GradientDrawable.OVAL);
             g.setColor(Color.parseColor(dark ? a[2] : a[1]));
-            if (a[0].equals(prefs.accent)) g.setStroke(dp(3), dark ? 0xFF8E8E93 : 0xFFC7C7CC);
+            if (a[0].equals(prefs.accent)) g.setStroke(dp(3), dark ? 0xFF8E8E93 : 0xFF8E8E93);
+            else if ("white".equals(a[0]) && !dark) g.setStroke(Math.max(1, dp(1)), 0xFFD1D1D6);
             dot.setBackground(g);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(32), dp(32));
             lp.setMargins(0, 0, dp(14), 0);
@@ -714,7 +721,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
     private void switchRow(LinearLayout box, String text, final String key, boolean value) {
         LinearLayout row = rowBase();
         row.addView(title(text), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        final IosSwitch sw = new IosSwitch(this, dark);
+        final IosSwitch sw = new IosSwitch(this, dark, accent());
         sw.setChecked(value);
         sw.setOnChange(new IosSwitch.OnChange() {
             @Override
@@ -772,7 +779,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         check.setText("✓");
         check.setTextSize(19);
         check.setTypeface(Typeface.DEFAULT_BOLD);
-        check.setTextColor(accent());
+        check.setTextColor(accentInk());
         check.setVisibility(selected ? View.VISIBLE : View.INVISIBLE);
         row.addView(check);
         pressable(row, new Runnable() {

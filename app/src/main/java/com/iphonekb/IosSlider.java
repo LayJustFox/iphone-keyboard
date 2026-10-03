@@ -61,7 +61,7 @@ final class IosSlider extends View {
         p.setColor(dark ? 0xFF3A3A3C : 0xFFE5E5EA);
         r.set(left, cy - th, right, cy + th);
         c.drawRoundRect(r, th, th, p);
-        p.setColor(accent);
+        p.setColor(Theme.isLight(accent) && !dark ? 0xFF8E8E93 : accent);
         r.set(left, cy - th, x, cy + th);
         c.drawRoundRect(r, th, th, p);
         p.setColor(0x1F000000);

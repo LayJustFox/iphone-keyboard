@@ -6,9 +6,12 @@ import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.animation.ValueAnimator;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.RenderEffect;
+import android.graphics.Shader;
 import android.graphics.drawable.ColorDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.media.AudioManager;
@@ -63,6 +66,11 @@ public final class KeyboardService extends InputMethodService
     private boolean clipBlur;          // stronger blur while the clipboard is open
     private boolean blurAvailable = true;
     private Object blurListener;
+    private boolean frozenOpaque;      // solid while the settings screen opens (no dark flash)
+
+    // Keys behind an open panel: 0 = fully visible, 1 = blurred away.
+    private float keysAway;
+    private ValueAnimator keysAnim;
 
     private String lang = "ru";
     private int mode = Layouts.LETTERS;
@@ -216,6 +224,7 @@ public final class KeyboardService extends InputMethodService
         clips.setMax(prefs.clipMax);
         if (!prefs.hasLang(lang)) lang = prefs.currentLang;
         if (kv != null) kv.applyPrefs(prefs);
+        frozenOpaque = false;
         applyTheme();
 
         int cls = info.inputType & InputType.TYPE_MASK_CLASS;
@@ -247,6 +256,7 @@ public final class KeyboardService extends InputMethodService
         if (ev != null) ev.hideNow();
         if (cv != null) cv.hideNow();
         clipBlur = false;
+        setKeysAway(false, false);
         if (searchPane != null) searchPane.setVisibility(View.GONE);
         if (cv != null) cv.setEnabledHistory(prefs.clipboard);
         if (kv != null) kv.cancelTouch();
@@ -369,7 +379,7 @@ public final class KeyboardService extends InputMethodService
         translucent = false;
         if (w != null && Build.VERSION.SDK_INT >= 31) {
             watchBlur();
-            boolean want = prefs.blur && blurAvailable && Prefs.STYLE_GLASS.equals(prefs.style);
+            boolean want = prefs.blur && blurAvailable && !frozenOpaque && Prefs.STYLE_GLASS.equals(prefs.style);
             if (want) {
                 if (!windowTranslucent) {
                     w.setFormat(PixelFormat.TRANSLUCENT);
@@ -827,6 +837,7 @@ public final class KeyboardService extends InputMethodService
         ev.setAbcLabel(Layouts.abc(lang));
         ev.setData(titles, icons, items);
         ev.show();
+        setKeysAway(true, true);
     }
 
     @Override
@@ -846,14 +857,62 @@ public final class KeyboardService extends InputMethodService
     @Override
     public void onEmojiClose() {
         if (ev != null) ev.hide();
+        setKeysAway(false, true);
         updateAutoShift();
     }
 
     @Override
     public void onSettings() {
-        Intent i = new Intent(this, SettingsActivity.class);
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        startActivity(i);
+        // Android pauses live blur while the new screen opens; going solid first means the
+        // see-through keyboard never shows the dark, unblurred screen behind it.
+        frozenOpaque = true;
+        applyTheme();
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                Intent i = new Intent(KeyboardService.this, SettingsActivity.class);
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                startActivity(i);
+            }
+        }, 40);
+    }
+
+    /**
+     * The keys behind an open panel (clipboard, emoji) blur out, shrink a little and fade, so the
+     * see-through panel shows a soft frosted background instead of sharp keys.
+     */
+    private void setKeysAway(final boolean away, boolean animate) {
+        if (kv == null) return;
+        if (keysAnim != null) keysAnim.cancel();
+        float target = away ? 1f : 0f;
+        if (!animate || prefs.animSpeed == Prefs.ANIM_OFF) {
+            applyKeysAway(target);
+            return;
+        }
+        keysAnim = ValueAnimator.ofFloat(keysAway, target);
+        keysAnim.setDuration(away ? 460 : 380);
+        keysAnim.setInterpolator(EmojiView.EASE_OUT);
+        keysAnim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+            @Override
+            public void onAnimationUpdate(ValueAnimator a) {
+                applyKeysAway((Float) a.getAnimatedValue());
+            }
+        });
+        keysAnim.start();
+    }
+
+    private void applyKeysAway(float v) {
+        keysAway = v;
+        kv.setAlpha(1f - v);
+        kv.setPivotX(kv.getWidth() / 2f);
+        kv.setPivotY(kv.getHeight());
+        kv.setScaleX(1f - 0.05f * v);
+        kv.setScaleY(1f - 0.05f * v);
+        if (Build.VERSION.SDK_INT >= 31) {
+            float r = v * TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 26,
+                    getResources().getDisplayMetrics());
+            kv.setRenderEffect(r < 0.5f ? null : RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP));
+        }
     }
 
     // ---------------------------------------------------------------- clipboard
@@ -912,6 +971,7 @@ public final class KeyboardService extends InputMethodService
         cv.setEnabledHistory(prefs.clipboard);
         setClipBlur(true);
         cv.show();
+        setKeysAway(true, true);
     }
 
     private void setClipBlur(boolean on) {
@@ -935,6 +995,7 @@ public final class KeyboardService extends InputMethodService
     public void onClipClose() {
         if (cv != null) cv.hide();
         setClipBlur(false);
+        setKeysAway(false, true);
         updateAutoShift();
     }
 
@@ -945,6 +1006,7 @@ public final class KeyboardService extends InputMethodService
         searchPane.setQuery("");
         searchPane.setVisibility(View.VISIBLE);
         cv.hideNow();
+        setKeysAway(false, true); // the keys come back to type the search
         mode = Layouts.LETTERS;
         refreshLayout();
         updateAutoShift();
@@ -959,6 +1021,7 @@ public final class KeyboardService extends InputMethodService
         updateSuggestions();
         updateAutoShift();
         cv.show();
+        setKeysAway(true, true);
     }
 
     // ---------------------------------------------------------------- language list (hold 🌐)
@@ -1002,6 +1065,7 @@ public final class KeyboardService extends InputMethodService
         if (searching) onClipSearchDone();
         if (ev != null) ev.hideNow();
         if (cv != null) cv.hideNow();
+        setKeysAway(false, false);
         setClipBlur(false);
         translating = true;
         transInput.setLength(0);

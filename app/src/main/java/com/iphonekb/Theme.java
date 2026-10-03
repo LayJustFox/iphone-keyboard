@@ -23,13 +23,16 @@ final class Theme {
     final int bubbleTop, bubbleBottom;
 
     final int text, accent, accentText, shiftOnBg, shiftOnFg, separator, dim, highlight, glow;
+    /** Accent used for text and thin marks: readable even when the accent is white. */
+    final int accentInk;
 
     private Theme(boolean dark, boolean glass, int accent, int panelAlpha, boolean live, float keyAlpha) {
         this.dark = dark;
         this.glass = glass;
         this.live = live;
         this.accent = accent;
-        this.accentText = 0xFFFFFFFF;
+        this.accentText = isLight(accent) ? 0xFF000000 : 0xFFFFFFFF;
+        this.accentInk = isLight(accent) && !dark ? 0xFF3A3A3C : accent;
         this.shiftOnBg = 0xFFFFFFFF;
         this.shiftOnFg = 0xFF000000;
         this.text = dark ? 0xFFFFFFFF : 0xFF000000;
@@ -113,6 +116,12 @@ final class Theme {
             specMid = scaleAlpha(specMid, keyAlpha);
             specBottom = scaleAlpha(specBottom, keyAlpha);
         }
+    }
+
+    /** True for very light colours (white accent): text on them must be dark. */
+    static boolean isLight(int c) {
+        int r = (c >> 16) & 0xFF, g = (c >> 8) & 0xFF, b = c & 0xFF;
+        return (0.299 * r + 0.587 * g + 0.114 * b) > 200;
     }
 
     private static int scaleAlpha(int c, float f) {

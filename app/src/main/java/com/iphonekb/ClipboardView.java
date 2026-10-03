@@ -78,6 +78,7 @@ final class ClipboardView extends View {
     private int pressHeader = H_NONE;
     private int pressIndex = -1;
     private int actionIndex = -1;       // card showing pin / delete
+    private long openedAt;              // for the cards' staggered entrance
     private int actionPress = 0;        // 1 = pin half, 2 = delete half
     private long clearConfirmUntil;
     private boolean longFired;
@@ -170,18 +171,22 @@ final class ClipboardView extends View {
         listVersion = -1;
         setVisibility(VISIBLE);
         setAlpha(0f);
-        setTranslationY(dp(44));
-        setScaleX(0.96f);
-        setScaleY(0.96f);
-        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(430)
+        // Settles in like an iOS sheet: from slightly larger and lower, fading in.
+        setPivotX(getWidth() / 2f);
+        setPivotY(getHeight());
+        setTranslationY(dp(18));
+        setScaleX(1.06f);
+        setScaleY(1.06f);
+        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(460)
                 .setInterpolator(EmojiView.EASE_OUT).start();
+        openedAt = SystemClock.uptimeMillis();
     }
 
     void hide() {
         if (getVisibility() != VISIBLE) return;
         animate().cancel();
-        animate().alpha(0f).translationY(dp(44)).scaleX(0.96f).scaleY(0.96f).setDuration(270)
-                .setInterpolator(EmojiView.EASE_IN)
+        animate().alpha(0f).translationY(dp(14)).scaleX(1.04f).scaleY(1.04f).setDuration(300)
+                .setInterpolator(EmojiView.EASE_OUT)
                 .withEndAction(new Runnable() {
                     @Override
                     public void run() {
@@ -297,12 +302,24 @@ final class ClipboardView extends View {
             small.setTextAlign(Paint.Align.LEFT);
         }
         int first = Math.max(0, (int) ((scroll - pad) / (cardH + gap)) * cols);
+        boolean entering = false;
         for (int i = first; i < l.size(); i++) {
             float top = cardTop(i);
             if (top > H) break;
             if (top + cardH < headerH) continue;
+            // Cards rise in one after another when the panel opens.
+            float t = Math.max(0f, Math.min(1f, (SystemClock.uptimeMillis() - openedAt - (i - first) * 28) / 360f));
+            float e = 1f - (1f - t) * (1f - t) * (1f - t);
+            if (t < 1f) entering = true;
+            if (e <= 0f) continue;
+            c.save();
+            c.translate(0, (1f - e) * dp(16));
+            int layer = e < 1f ? c.saveLayerAlpha(0, top - dp(20), W, top + cardH + dp(20), Math.round(255 * e)) : -1;
             drawCard(c, l.get(i), i, cardLeft(i), top, cw);
+            if (layer >= 0) c.restoreToCount(layer);
+            c.restore();
         }
+        if (entering) postInvalidateOnAnimation();
         c.restore();
         drawHeader(c);
     }
@@ -403,9 +420,9 @@ final class ClipboardView extends View {
             c.drawText(s, 0, s.length(), tmp.left + dp(30), base, tp);
             // Caret after the typed text
             float x = tmp.left + dp(30) + (query.isEmpty() ? 0 : tp.measureText(s, 0, s.length())) + dp(1);
-            fill.setColor(theme.accent);
+            fill.setColor(theme.accentInk);
             c.drawRect(x, cy - dp(9), x + dp(2), cy + dp(9), fill);
-            headerButton(c, "Готово", W - dp(88), W - pad, cy, pressHeader == H_DONE, theme.accent);
+            headerButton(c, "Готово", W - dp(88), W - pad, cy, pressHeader == H_DONE, theme.accentInk);
             return;
         }
 
@@ -425,7 +442,7 @@ final class ClipboardView extends View {
         boolean confirm = SystemClock.uptimeMillis() < clearConfirmUntil;
         float clearW = confirm ? dp(116) : dp(86);
         headerButton(c, confirm ? "Удалить всё?" : "Очистить", W - pad - clearW, W - pad, cy,
-                pressHeader == H_CLEAR, confirm ? 0xFFFF3B30 : theme.accent);
+                pressHeader == H_CLEAR, confirm ? 0xFFFF3B30 : theme.accentInk);
         float sx = W - pad - clearW - dp(26);
         if (pressHeader == H_SEARCH) {
             fill.setColor(theme.highlight);

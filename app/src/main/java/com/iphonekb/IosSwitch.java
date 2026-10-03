@@ -19,6 +19,7 @@ final class IosSwitch extends View {
 
     private final float d;
     private final boolean dark;
+    private final int accent;
     private boolean checked;
     private float pos;
     private ValueAnimator anim;
@@ -26,9 +27,10 @@ final class IosSwitch extends View {
     private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF r = new RectF();
 
-    IosSwitch(Context c, boolean dark) {
+    IosSwitch(Context c, boolean dark, int accent) {
         super(c);
         this.dark = dark;
+        this.accent = accent;
         d = c.getResources().getDisplayMetrics().density;
     }
 
@@ -69,15 +71,26 @@ final class IosSwitch extends View {
     protected void onDraw(Canvas c) {
         float w = getWidth(), h = getHeight();
         int off = dark ? 0xFF39393D : 0xFFE9E9EA;
-        int on = dark ? 0xFF30D158 : 0xFF34C759;
-        p.setColor(blend(off, on, pos));
+        boolean light = Theme.isLight(accent);
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(blend(off, accent, pos));
         r.set(0, 0, w, h);
         c.drawRoundRect(r, h / 2, h / 2, p);
+        if (light && !dark) {
+            // White on a white card: a fine outline keeps the switch visible.
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(Math.max(1f, d));
+            p.setColor(0x24000000);
+            r.set(d / 2, d / 2, w - d / 2, h - d / 2);
+            c.drawRoundRect(r, h / 2, h / 2, p);
+            p.setStyle(Paint.Style.FILL);
+        }
         float kr = h / 2 - 2 * d;
         float cx = 2 * d + kr + pos * (w - 4 * d - 2 * kr);
         p.setColor(0x26000000);
         c.drawCircle(cx, h / 2 + 1.5f * d, kr, p);
-        p.setColor(0xFFFFFFFF);
+        // On a white track the knob turns light grey so it still stands out.
+        p.setColor(light ? blend(0xFFFFFFFF, dark ? 0xFF8E8E93 : 0xFFD1D1D6, pos) : 0xFFFFFFFF);
         c.drawCircle(cx, h / 2, kr, p);
     }
 

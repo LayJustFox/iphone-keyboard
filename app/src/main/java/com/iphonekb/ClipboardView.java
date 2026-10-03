@@ -378,6 +378,8 @@ final class ClipboardView extends View {
             bgShader = new LinearGradient(0, 0, 0, Math.max(1, bgShaderH), theme.panelTop(), theme.panelBottom(),
                     Shader.TileMode.CLAMP);
         }
+        // Gradients are drawn with the paint's alpha: start fully opaque every time.
+        fill.setColor(0xFFFFFFFF);
         fill.setShader(bgShader);
         c.drawRect(0, 0, getWidth(), getHeight(), fill);
         fill.setShader(null);

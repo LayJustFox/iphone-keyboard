@@ -138,6 +138,8 @@ final class TranslatorView extends View {
             bgH = H;
             bg = new LinearGradient(0, 0, 0, Math.max(1, H), theme.panelTop(), theme.panelTop(), Shader.TileMode.CLAMP);
         }
+        // Gradients are drawn with the paint's alpha: start fully opaque every time.
+        fill.setColor(0xFFFFFFFF);
         fill.setShader(bg);
         c.drawRect(0, 0, W, H, fill);
         fill.setShader(null);

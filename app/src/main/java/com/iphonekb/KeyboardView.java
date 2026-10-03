@@ -1189,6 +1189,8 @@ final class KeyboardView extends View {
             return;
         }
         shaderAt(panelShader, 0, getHeight());
+        // Gradients are drawn with the paint's alpha: start fully opaque every time.
+        fill.setColor(0xFFFFFFFF);
         fill.setShader(panelShader);
         c.drawRect(0, 0, getWidth(), getHeight(), fill);
         fill.setShader(null);
@@ -1269,6 +1271,8 @@ final class KeyboardView extends View {
         if (theme.glass) {
             Shader s = special ? specShader : keyShader;
             shaderAt(s, r.top, r.height());
+            // Gradients are drawn with the paint's alpha: start fully opaque every time.
+            fill.setColor(0xFFFFFFFF);
             fill.setShader(s);
             c.drawRoundRect(r, m.radius, m.radius, fill);
             fill.setShader(null);

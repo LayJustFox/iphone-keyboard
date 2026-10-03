@@ -114,6 +114,8 @@ final class EmojiView extends View {
             panelShader = new LinearGradient(0, 0, 0, Math.max(1, shaderH),
                     theme.panelTop(), theme.panelBottom(), Shader.TileMode.CLAMP);
         }
+        // Gradients are drawn with the paint's alpha: start fully opaque every time.
+        fill.setColor(0xFFFFFFFF);
         fill.setShader(panelShader);
         c.drawRect(0, 0, getWidth(), getHeight(), fill);
         fill.setShader(null);

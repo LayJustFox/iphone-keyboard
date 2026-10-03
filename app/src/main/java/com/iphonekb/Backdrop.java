@@ -58,6 +58,8 @@ final class Backdrop extends View {
                     dark ? new int[]{0xFF1B2440, 0xFF3A1F4A, 0xFF10303A} : new int[]{0xFFDCEBFF, 0xFFFBE3F0, 0xFFE0F7EC},
                     null, Shader.TileMode.CLAMP);
         }
+        // Gradients are drawn with the paint's alpha: start fully opaque every time.
+        p.setColor(0xFFFFFFFF);
         p.setShader(bg);
         c.drawRect(0, 0, W, H, p);
         p.setShader(null);

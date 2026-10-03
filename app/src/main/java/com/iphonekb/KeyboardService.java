@@ -148,7 +148,7 @@ public final class KeyboardService extends InputMethodService
         cv.setStore(clips);
         searchPane.setStore(clips);
 
-        FrameLayout stack = new FrameLayout(this);
+        PanelStack stack = new PanelStack(this); // panels always match the keyboard's height
         stack.addView(kv, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         stack.addView(ev, new FrameLayout.LayoutParams(

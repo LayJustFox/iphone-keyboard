@@ -50,11 +50,13 @@ final class KeyboardView extends View {
         void onClipboard();
         void onSettings();
         void onQuickPaste();
+        void onLanguagePicked(int index);
+        void onSpaceHold();
     }
 
     static final int SHIFT_OFF = 0, SHIFT_ON = 1, SHIFT_LOCK = 2;
 
-    private static final int NONE = 0, KEY = 1, STRIP = 2;
+    private static final int NONE = 0, KEY = 1, STRIP = 2, MENU = 3;
     private static final int TOOL_CLIP = 10, TOOL_SETTINGS = 11, TOOL_PASTE = 12;
 
     private final Listener listener;
@@ -120,6 +122,17 @@ final class KeyboardView extends View {
     private final Anim accentT = new Anim(0);    // blue return key
     private final Anim shiftT = new Anim(0);     // white shift key
     private final Anim stripT = new Anim(0);     // 1 = suggestions, 0 = toolbar
+    private final Anim menuT = new Anim(0);      // language menu (hold 🌐)
+
+    // ---- language menu
+    private String[] langItems = new String[0];
+    private int langCurrent;
+    private String[] menuItems = new String[0];
+    private boolean menuShown, menuSticky;
+    private final RectF menuRect = new RectF();
+    private float menuRowH;
+    private int menuSel = -1;
+    private Key menuAnchor;
     private long lastFrame;
     private boolean frameActive;
 
@@ -300,7 +313,14 @@ final class KeyboardView extends View {
         kick();
     }
 
+    /** Languages offered when 🌐 is held (current one gets a checkmark). */
+    void setLanguageMenu(String[] names, int current) {
+        langItems = names;
+        langCurrent = current;
+    }
+
     void cancelTouch() {
+        closeMenu();
         endTouch();
     }
 
@@ -335,6 +355,7 @@ final class KeyboardView extends View {
         moving |= ease(accentT, dt, 70 * base);
         moving |= ease(shiftT, dt, 45 * base);
         moving |= ease(stripT, dt, 70 * base);
+        moving |= ease(menuT, dt, 45 * base);
         if (layout != null) {
             for (Key[] row : layout.rows) {
                 for (Key k : row) moving |= easeKey(k, dt, base);
@@ -369,7 +390,7 @@ final class KeyboardView extends View {
     }
 
     private void snapAll() {
-        Anim[] all = {caseT, labelsT, flashT, bubbleT, altsT, layoutT, accentT, shiftT, stripT};
+        Anim[] all = {caseT, labelsT, flashT, bubbleT, altsT, layoutT, accentT, shiftT, stripT, menuT};
         for (Anim a : all) a.v = a.target;
         if (layout != null) for (Key[] row : layout.rows) for (Key k : row) k.press = k.pressTarget;
         globeKey.press = globeKey.pressTarget;
@@ -624,7 +645,7 @@ final class KeyboardView extends View {
                 begin(e.getPointerId(0), e.getX(), e.getY());
                 return true;
             case MotionEvent.ACTION_POINTER_DOWN: {
-                if (trackpad || altsShown) return true;
+                if (trackpad || altsShown || menuShown) return true;
                 // Two-thumb typing: the first key is typed as soon as the next one is touched.
                 finishPrevious();
                 int i = e.getActionIndex();
@@ -667,6 +688,17 @@ final class KeyboardView extends View {
         lastX = x;
         lastY = y;
         downX = x;
+        if (menuShown) {
+            if (menuRect.contains(x, y)) {
+                touchKind = MENU;
+                menuSel = menuRowAt(x, y);
+                kick();
+            } else {
+                closeMenu(); // a tap outside just closes the list
+                touchKind = NONE;
+            }
+            return;
+        }
         if (y < m.stripH) {
             touchKind = STRIP;
             pressedStrip = stripTarget(x);
@@ -717,7 +749,7 @@ final class KeyboardView extends View {
                 showBubble(k);
                 break;
             case Key.SPACE:
-                if (prefs.trackpad) handler.postDelayed(longPress, lp + 40);
+                if (prefs.trackpad || Prefs.HOLD_TRANSLATE.equals(prefs.spaceHold)) handler.postDelayed(longPress, lp + 40);
                 break;
             case Key.GLOBE:
                 handler.postDelayed(longPress, Math.max(lp, 450));
@@ -754,6 +786,15 @@ final class KeyboardView extends View {
         if (touchKind == STRIP) {
             if (pressedStrip >= 0 && (stripTarget(x) != pressedStrip || y > m.stripH + dp(24))) {
                 pressedStrip = -1;
+                kick();
+            }
+            return;
+        }
+        if (menuShown && (touchKind == MENU || touchKind == KEY)) {
+            int s2 = menuRowAt(x, y);
+            if (s2 != menuSel) {
+                menuSel = s2;
+                if (s2 >= 0) listener.onFeedback(Key.CHAR);
                 kick();
             }
             return;
@@ -813,6 +854,17 @@ final class KeyboardView extends View {
     }
 
     private void release(float x, float y) {
+        if (menuShown && (touchKind == MENU || touchKind == KEY)) {
+            int sel = menuRowAt(x, y);
+            boolean fromKey = touchKind == KEY;
+            endTouch();
+            if (sel >= 0) pickMenu(sel);
+            else if (fromKey) {
+                menuSticky = true; // released on 🌐: keep the list open for a tap
+                kick();
+            } else closeMenu();
+            return;
+        }
         if (touchKind == STRIP) {
             int i = pressedStrip;
             pressedStrip = -1;
@@ -893,15 +945,121 @@ final class KeyboardView extends View {
                 if (k.alts != null) showAlts(k);
                 break;
             case Key.SPACE:
-                startTrackpad();
+                if (Prefs.HOLD_TRANSLATE.equals(prefs.spaceHold)) {
+                    // Hold the space bar: translator (a swipe along it still moves the cursor).
+                    longFired = true;
+                    listener.onFeedback(Key.CHAR);
+                    listener.onSpaceHold();
+                } else {
+                    startTrackpad();
+                }
                 break;
             case Key.GLOBE:
                 longFired = true;
-                listener.onGlobeLong();
+                if (langItems.length > 0) showMenu(k);
+                else listener.onGlobeLong();
                 break;
             default:
                 break;
         }
+    }
+
+    // ---------------------------------------------------------------- language menu
+
+    private void showMenu(Key anchor) {
+        int n = langItems.length;
+        menuItems = new String[n + 1];
+        System.arraycopy(langItems, 0, menuItems, 0, n);
+        menuItems[n] = "Другие клавиатуры…";
+        text.setTypeface(Typeface.DEFAULT);
+        text.setTextSize(dp(17));
+        float w = dp(200);
+        for (String s : menuItems) w = Math.max(w, text.measureText(s) + dp(64));
+        w = Math.min(w, getWidth() - 2 * m.side);
+        menuRowH = dp(44);
+        float h = menuItems.length * menuRowH + dp(8);
+        float left = Math.max(m.side, Math.min(anchor.rect.left, getWidth() - m.side - w));
+        float bottom = anchor.rect.top - dp(6);
+        float top = Math.max(dp(2), bottom - h);
+        menuRect.set(left, top, left + w, top + h);
+        menuAnchor = anchor;
+        menuShown = true;
+        menuSticky = false;
+        menuSel = -1;
+        menuT.v = animOn() ? Math.max(menuT.v, 0.2f) : 1f;
+        menuT.target = 1;
+        listener.onFeedback(Key.CHAR);
+        kick();
+    }
+
+    private int menuRowAt(float x, float y) {
+        if (!menuShown || !menuRect.contains(x, y)) return -1;
+        int i = (int) ((y - menuRect.top - dp(4)) / menuRowH);
+        return i >= 0 && i < menuItems.length ? i : -1;
+    }
+
+    private void pickMenu(int i) {
+        closeMenu();
+        if (i < langItems.length) listener.onLanguagePicked(i);
+        else listener.onGlobeLong();
+    }
+
+    private void closeMenu() {
+        if (!menuShown) return;
+        menuShown = false;
+        menuSticky = false;
+        menuSel = -1;
+        menuT.target = 0;
+        if (!animOn()) menuT.v = 0;
+        kick();
+    }
+
+    private void drawMenu(Canvas c, float t) {
+        float s = 0.85f + 0.15f * t;
+        c.save();
+        c.scale(s, s, menuRect.left + dp(20), menuRect.bottom);
+        float r = dp(14);
+        // shadow
+        fill.setColor(alpha(theme.dark ? 0x80000000 : 0x33202A3A, t));
+        tmp.set(menuRect.left, menuRect.top + dp(3), menuRect.right, menuRect.bottom + dp(4));
+        c.drawRoundRect(tmp, r, r, fill);
+        // glass body
+        shaderAt(bubbleShader, menuRect.top, menuRect.height());
+        fill.setShader(bubbleShader);
+        fill.setAlpha(Math.round(255 * t));
+        c.drawRoundRect(menuRect, r, r, fill);
+        fill.setShader(null);
+        fill.setAlpha(255);
+        if (theme.glass) drawRim(c, menuRect, r, t);
+
+        text.setTypeface(Typeface.DEFAULT);
+        text.setTextSize(dp(17));
+        text.setTextAlign(Paint.Align.LEFT);
+        for (int i = 0; i < menuItems.length; i++) {
+            float top = menuRect.top + dp(4) + i * menuRowH;
+            boolean sel = i == menuSel;
+            if (sel) {
+                fill.setColor(alpha(theme.accent, t));
+                tmp.set(menuRect.left + dp(4), top, menuRect.right - dp(4), top + menuRowH);
+                c.drawRoundRect(tmp, dp(10), dp(10), fill);
+            } else if (i > 0 && i - 1 != menuSel) {
+                fill.setColor(alpha(theme.separator, t));
+                c.drawRect(menuRect.left + dp(16), top, menuRect.right - dp(16), top + Math.max(1f, dp(0.5f)), fill);
+            }
+            boolean other = i == langItems.length;
+            int col = sel ? theme.accentText : (other ? theme.accent : theme.text);
+            text.setColor(alpha(col, t));
+            float base = top + menuRowH / 2 - (text.descent() + text.ascent()) / 2;
+            c.drawText(menuItems[i], menuRect.left + dp(16), base, text);
+            if (i == langCurrent && !other) {
+                text.setTextAlign(Paint.Align.RIGHT);
+                text.setColor(alpha(sel ? theme.accentText : theme.accent, t));
+                c.drawText("✓", menuRect.right - dp(16), base, text);
+                text.setTextAlign(Paint.Align.LEFT);
+            }
+        }
+        text.setTextAlign(Paint.Align.CENTER);
+        c.restore();
     }
 
     private void startTrackpad() {
@@ -980,6 +1138,7 @@ final class KeyboardView extends View {
         drawGlobeStrip(c);
         if (bubbleKey != null && bubbleT.v > 0.004f && labelsT.v > 0.5f) drawPreview(c, bubbleKey, bubbleT.v);
         if (altsKey != null && altsT.v > 0.004f) drawAlts(c, altsKey, altsT.v);
+        if (menuT.v > 0.004f) drawMenu(c, menuT.v);
 
         frameActive = moving;
         if (moving) postInvalidateOnAnimation();

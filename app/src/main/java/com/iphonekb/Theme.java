@@ -6,6 +6,8 @@ package com.iphonekb;
  */
 final class Theme {
     final boolean dark, glass;
+    /** The window is see-through with a live blur behind it. */
+    final boolean live;
 
     // Panel (keyboard background) – a vertical gradient for glass.
     final int bg, bgTop, bgBottom;
@@ -22,9 +24,10 @@ final class Theme {
 
     final int text, accent, accentText, shiftOnBg, shiftOnFg, separator, dim, highlight, glow;
 
-    private Theme(boolean dark, boolean glass, int accent, int panelAlpha) {
+    private Theme(boolean dark, boolean glass, int accent, int panelAlpha, boolean live) {
         this.dark = dark;
         this.glass = glass;
+        this.live = live;
         this.accent = accent;
         this.accentText = 0xFFFFFFFF;
         this.shiftOnBg = 0xFFFFFFFF;
@@ -62,12 +65,12 @@ final class Theme {
             bg = 0xFFE3E6EB;
             bgTop = a | 0xEEF0F4;
             bgBottom = a | 0xD9DDE3;
-            keyTop = 0xFCFFFFFF;
-            keyMid = 0xEBFFFFFF;
-            keyBottom = 0xDDFFFFFF;
-            specTop = 0x9EFFFFFF;
-            specMid = 0x70FFFFFF;
-            specBottom = 0x5CF2F4F7;
+            keyTop = live ? 0xE8FFFFFF : 0xFCFFFFFF;
+            keyMid = live ? 0xCCFFFFFF : 0xEBFFFFFF;
+            keyBottom = live ? 0xBDFFFFFF : 0xDDFFFFFF;
+            specTop = live ? 0x80FFFFFF : 0x9EFFFFFF;
+            specMid = live ? 0x52FFFFFF : 0x70FFFFFF;
+            specBottom = live ? 0x40F2F4F7 : 0x5CF2F4F7;
             rimTop = 0xFFFFFFFF;
             rimBottom = 0x33FFFFFF;
             shadow = 0x2E1B2433;
@@ -104,12 +107,21 @@ final class Theme {
         }
     }
 
-    static Theme create(boolean dark, boolean glass, int accent, int panelAlpha) {
-        return new Theme(dark, glass, accent, Math.max(0, Math.min(255, panelAlpha)));
+    static Theme create(boolean dark, boolean glass, int accent, int panelAlpha, boolean live) {
+        return new Theme(dark, glass, accent, Math.max(0, Math.min(255, panelAlpha)), live);
     }
 
     static Theme light() {
-        return create(false, true, 0xFF007AFF, 255);
+        return create(false, true, 0xFF007AFF, 255, false);
+    }
+
+    /** Panel colour for overlays (emoji, clipboard, translator): see-through on live glass. */
+    int panelTop() {
+        return glass ? bgTop : bg;
+    }
+
+    int panelBottom() {
+        return glass ? bgBottom : bg;
     }
 
     /** Solid colour behind the keys (navigation bar, panels). */
@@ -121,7 +133,8 @@ final class Theme {
         boolean dark = Prefs.THEME_DARK.equals(p.theme)
                 || (Prefs.THEME_AUTO.equals(p.theme) && systemDark);
         boolean glass = Prefs.STYLE_GLASS.equals(p.style);
-        int alpha = translucent ? Math.round(255 * p.glassOpacity / 100f) : 255;
-        return create(dark, glass, p.accentColor(dark), alpha);
+        // Live glass: the tint gets denser as "transparency" goes down; never fully clear.
+        int alpha = translucent ? Math.round(255 * (0.08f + 0.92f * p.glassOpacity / 100f)) : 255;
+        return create(dark, glass, p.accentColor(dark), alpha, translucent && glass);
     }
 }

@@ -45,11 +45,13 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
     private FrameLayout host;
     private final ArrayList<View> stack = new ArrayList<>();
     private KeyboardView preview;
+    private Backdrop backdrop;
+    private boolean blurSupported;
     private int previewMode = Layouts.LETTERS;
     private int previewShift = KeyboardView.SHIFT_OFF;
 
     private TextView status;
-    private TextView vStyle, vSize, vAnim, vSound, vLangs, vClip;
+    private TextView vStyle, vSize, vAnim, vSound, vLangs, vClip, vTrans;
 
     private int dp(float v) {
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
@@ -96,7 +98,13 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         getWindow().setStatusBarColor(pageBg());
         getWindow().setNavigationBarColor(pageBg());
 
+        if (Build.VERSION.SDK_INT >= 31) {
+            WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+            blurSupported = wm != null && wm.isCrossWindowBlurEnabled();
+        }
         preview = new KeyboardView(this, this, prefs);
+        backdrop = new Backdrop(this);
+        backdrop.setDark(dark);
         host = new FrameLayout(this);
         host.setBackgroundColor(pageBg());
         setContentView(host);
@@ -219,6 +227,10 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         FrameLayout dock = page.findViewWithTag("dock");
         if (dock == null || preview.getParent() == dock) return;
         if (preview.getParent() instanceof ViewGroup) ((ViewGroup) preview.getParent()).removeView(preview);
+        if (backdrop.getParent() instanceof ViewGroup) ((ViewGroup) backdrop.getParent()).removeView(backdrop);
+        // Moving "app content" behind the preview, blurred live like behind the real keyboard.
+        dock.addView(backdrop, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
         dock.addView(preview, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
     }
@@ -262,7 +274,8 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
             }
         });
         footer(col, "Android покажет предупреждение о сборе текста — так он делает для любой "
-                + "сторонней клавиатуры. У этой клавиатуры нет доступа к интернету.");
+                + "сторонней клавиатуры. Вводимый текст никуда не отправляется: интернет нужен "
+                + "только переводчику, чтобы один раз скачать языки.");
 
         LinearLayout g = group(col, null);
         vStyle = nav(g, 0xFF007AFF, "🎨", "Внешний вид", new Runnable() {
@@ -309,6 +322,12 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
                 push(clipboardPage(), true);
             }
         });
+        vTrans = nav(g2, 0xFFFF9500, "🈯", "Переводчик", new Runnable() {
+            @Override
+            public void run() {
+                push(translatorPage(), true);
+            }
+        });
 
         LinearLayout tryIt = group(col, "Попробовать");
         EditText et = new EditText(this);
@@ -349,18 +368,23 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         addRow(ac, hs, 16);
         buildAccents(dots);
 
-        boolean blurSupported = false;
-        if (Build.VERSION.SDK_INT >= 31) {
-            WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-            blurSupported = wm != null && wm.isCrossWindowBlurEnabled();
-        }
-        LinearLayout gl = group(col, "Стекло");
+        LinearLayout gl = group(col, "Живое стекло");
+        TextView support = new TextView(this);
+        support.setTextSize(15);
+        support.setTextColor(blurSupported ? label() : 0xFFFF3B30);
+        support.setPadding(dp(16), dp(12), dp(16), dp(12));
+        support.setText(blurSupported
+                ? "✓ Телефон поддерживает живое размытие"
+                : Build.VERSION.SDK_INT >= 31
+                ? "Размытие сейчас выключено системой (режим энергосбережения или ограничение производителя)"
+                : "Живое размытие доступно на Android 12 и новее");
+        addRow(gl, support, 16);
         switchRow(gl, "Размытие фона", "blur", prefs.blur);
-        slider(gl, "Прозрачность", "glass_opacity", 40, 100, prefs.glassOpacity, "%");
-        footer(col, blurSupported
-                ? "Размытие показывает приложение под клавиатурой через стекло. Работает в стиле "
-                + "Liquid Glass. Если размывается весь экран — выключите."
-                : "Размытие фона требует Android 12 или новее и поддержки телефоном.");
+        slider(gl, "Сила размытия", "blur_radius", 0, 80, prefs.blurRadius, " dp");
+        slider(gl, "Прозрачность", "glass_transparency", 0, 92, 100 - prefs.glassOpacity, "%");
+        footer(col, "Как на iPhone: под клавиатурой в реальном времени размывается то, что на экране, "
+                + "и всё меняется на лету. Внизу — живой предпросмотр поверх движущейся картинки. "
+                + "Размытие работает в стиле Liquid Glass.");
         return page("Внешний вид", col, true);
     }
 
@@ -527,6 +551,21 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         footer(col, "Закреплённые записи останутся. История хранится только на телефоне; "
                 + "пароли, помеченные приложениями как секретные, не сохраняются.");
         return page("Буфер обмена", col, false);
+    }
+
+    private View translatorPage() {
+        LinearLayout col = column();
+        LinearLayout h = group(col, "Удержание пробела");
+        choices(h, new String[]{"Открывает переводчик", "Включает трекпад"},
+                new String[]{Prefs.HOLD_TRANSLATE, Prefs.HOLD_TRACKPAD}, prefs.spaceHold, "space_hold");
+        footer(col, "Проведите пальцем по пробелу — курсор двигается в любом режиме.");
+        LinearLayout g = group(col, "Языковые пакеты");
+        switchRow(g, "Скачивать только по Wi-Fi", "trans_wifi", prefs.translatorWifiOnly);
+        footer(col, "Удерживайте пробел и печатайте — перевод появляется сразу, «Вставить» или "
+                + "кнопка ввода вставляет его в поле. Нажмите на язык, чтобы выбрать другой, ⇄ меняет "
+                + "языки местами. Перевод выполняется прямо на телефоне (Google ML Kit): текст никуда "
+                + "не отправляется. Интернет нужен только один раз, чтобы скачать язык (~30 МБ).");
+        return page("Переводчик", col, false);
     }
 
     private void replaceTop(View page) {
@@ -804,6 +843,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         vSound.setText(h[Math.max(0, Math.min(3, prefs.haptic))]);
         vLangs.setText(String.valueOf(prefs.langs.length));
         vClip.setText(prefs.clipboard ? String.format("%,d", prefs.clipMax).replace(',', ' ') : "Выкл.");
+        vTrans.setText(Prefs.HOLD_TRANSLATE.equals(prefs.spaceHold) ? "Пробел" : "Выкл.");
     }
 
     private void updateStatus() {
@@ -827,11 +867,24 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
     private void refreshPreview() {
         prefs.reload();
         preview.applyPrefs(prefs);
-        preview.setTheme(Theme.from(prefs, dark, false));
+        boolean live = blurSupported && prefs.blur && Prefs.STYLE_GLASS.equals(prefs.style);
+        preview.setTheme(Theme.from(prefs, dark, live));
+        backdrop.setVisibility(live ? View.VISIBLE : View.GONE);
+        if (live) {
+            backdrop.setBlur(prefs.blurRadius);
+            backdrop.invalidate();
+        }
         String lang = prefs.currentLang;
         preview.setLocale(Layouts.locale(lang));
         preview.setLayout(Layouts.get(lang, previewMode, prefs.numberRow, !prefs.globeRow),
                 previewMode == Layouts.LETTERS);
+        String[] names = new String[prefs.langs.length];
+        int cur = 0;
+        for (int i = 0; i < names.length; i++) {
+            names[i] = Layouts.name(prefs.langs[i]);
+            if (prefs.langs[i].equals(lang)) cur = i;
+        }
+        preview.setLanguageMenu(names, cur);
         preview.setShift(previewShift);
         preview.setSpaceLabel(Layouts.space(lang));
         preview.setReturn(Layouts.returnLabel(lang, Layouts.RET), false);
@@ -881,4 +934,13 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
     @Override public void onClipboard() { }
     @Override public void onSettings() { }
     @Override public void onQuickPaste() { }
+    @Override public void onLanguagePicked(int index) {
+        if (index >= 0 && index < prefs.langs.length) {
+            prefs.setCurrentLang(prefs.langs[index]);
+            previewMode = Layouts.LETTERS;
+            refreshPreview();
+            preview.flashLanguage(Layouts.name(prefs.currentLang));
+        }
+    }
+    @Override public void onSpaceHold() { }
 }

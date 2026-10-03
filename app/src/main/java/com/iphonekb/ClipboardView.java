@@ -3,6 +3,8 @@ package com.iphonekb;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.LinearGradient;
+import android.graphics.Shader;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Typeface;
@@ -276,7 +278,7 @@ final class ClipboardView extends View {
     @Override
     protected void onDraw(Canvas c) {
         relayout();
-        c.drawColor(theme.solidBg());
+        drawBackground(c);
         List<ClipStore.Clip> l = items();
         int W = getWidth(), H = getHeight() - bottomInset;
         float cw = cardW();
@@ -365,10 +367,24 @@ final class ClipboardView extends View {
         c.drawLine(left + half, top + dp(14), left + half, top + cardH - dp(14), stroke);
     }
 
+    private LinearGradient bgShader;
+    private int bgShaderH;
+    private Theme bgShaderTheme;
+
+    private void drawBackground(Canvas c) {
+        if (bgShader == null || bgShaderH != getHeight() || bgShaderTheme != theme) {
+            bgShaderH = getHeight();
+            bgShaderTheme = theme;
+            bgShader = new LinearGradient(0, 0, 0, Math.max(1, bgShaderH), theme.panelTop(), theme.panelBottom(),
+                    Shader.TileMode.CLAMP);
+        }
+        fill.setShader(bgShader);
+        c.drawRect(0, 0, getWidth(), getHeight(), fill);
+        fill.setShader(null);
+    }
+
     private void drawHeader(Canvas c) {
         int W = getWidth();
-        fill.setColor(theme.solidBg());
-        c.drawRect(0, 0, W, headerH, fill);
         float cy = headerH / 2;
         tp.setTypeface(Typeface.DEFAULT);
 

@@ -5,6 +5,7 @@ import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -12,6 +13,8 @@ import android.graphics.drawable.ColorDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.media.AudioManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PersistableBundle;
 import android.os.SystemClock;
 import android.os.VibrationEffect;
@@ -36,7 +39,7 @@ import java.util.List;
 import java.util.Locale;
 
 public final class KeyboardService extends InputMethodService
-        implements KeyboardView.Listener, EmojiView.Listener, ClipboardView.Listener {
+        implements KeyboardView.Listener, EmojiView.Listener, ClipboardView.Listener, TranslatorView.Listener {
 
     private static final int HIRA = 0, KATA = 1, LATIN = 2;
     private static final long QUICK_PASTE_MS = 3 * 60 * 1000;
@@ -77,6 +80,36 @@ public final class KeyboardService extends InputMethodService
     private final StringBuilder searchQuery = new StringBuilder();
     private ClipStore.Clip quickPasteDone;
 
+    // translator (hold the space bar)
+    private TranslatorView tv;
+    private TranslateEngine engine;
+    private boolean translating;
+    private final StringBuilder transInput = new StringBuilder();
+    private int transReq;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable translateNow = new Runnable() {
+        @Override
+        public void run() {
+            runTranslation();
+        }
+    };
+
+    /** Settings changed in the app apply at once, even while the keyboard is open. */
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
+            new SharedPreferences.OnSharedPreferenceChangeListener() {
+                @Override
+                public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
+                    if (key == null || key.equals("current") || key.equals("recent_emoji")
+                            || key.startsWith("trans_")) return;
+                    prefs.reload();
+                    if (kv == null) return;
+                    kv.applyPrefs(prefs);
+                    applyTheme();
+                    refreshLayout();
+                    updateSuggestions();
+                }
+            };
+
     private final ClipboardManager.OnPrimaryClipChangedListener clipListener =
             new ClipboardManager.OnPrimaryClipChangedListener() {
                 @Override
@@ -101,6 +134,8 @@ public final class KeyboardService extends InputMethodService
         clipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         if (clipboardManager != null) clipboardManager.addPrimaryClipChangedListener(clipListener);
         lang = prefs.currentLang;
+        prefs.registerListener(prefListener);
+        engine = new TranslateEngine();
     }
 
     @Override
@@ -109,6 +144,7 @@ public final class KeyboardService extends InputMethodService
         ev = new EmojiView(this, this);
         cv = new ClipboardView(this, this, false);
         searchPane = new ClipboardView(this, this, true);
+        tv = new TranslatorView(this, this);
         cv.setStore(clips);
         searchPane.setStore(clips);
 
@@ -127,6 +163,10 @@ public final class KeyboardService extends InputMethodService
         int paneH = Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 210,
                 getResources().getDisplayMetrics()));
         root.addView(searchPane, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, paneH));
+        int transH = Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 168,
+                getResources().getDisplayMetrics()));
+        root.addView(tv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, transH));
+        tv.setVisibility(View.GONE);
         root.addView(stack, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         searchPane.setVisibility(View.GONE);
@@ -196,6 +236,7 @@ public final class KeyboardService extends InputMethodService
         selEnd = info.initialSelEnd;
         searching = false;
         searchQuery.setLength(0);
+        closeTranslator();
 
         if (ev != null) ev.hideNow();
         if (cv != null) cv.hideNow();
@@ -218,6 +259,7 @@ public final class KeyboardService extends InputMethodService
             jaMode = HIRA;
         }
         searching = false;
+        closeTranslator();
         if (kv != null) kv.cancelTouch();
         words.save();
     }
@@ -225,6 +267,8 @@ public final class KeyboardService extends InputMethodService
     @Override
     public void onDestroy() {
         if (clipboardManager != null) clipboardManager.removePrimaryClipChangedListener(clipListener);
+        prefs.unregisterListener(prefListener);
+        engine.close();
         words.save();
         clips.flush();
         super.onDestroy();
@@ -287,7 +331,7 @@ public final class KeyboardService extends InputMethodService
                 w.setFormat(PixelFormat.TRANSLUCENT);
                 w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
                 w.setBackgroundBlurRadius(Math.round(TypedValue.applyDimension(
-                        TypedValue.COMPLEX_UNIT_DIP, 28, getResources().getDisplayMetrics())));
+                        TypedValue.COMPLEX_UNIT_DIP, prefs.blurRadius, getResources().getDisplayMetrics())));
                 translucent = true;
             } else {
                 w.setBackgroundBlurRadius(0);
@@ -300,6 +344,7 @@ public final class KeyboardService extends InputMethodService
         if (ev != null) ev.setTheme(theme);
         if (cv != null) cv.setTheme(theme);
         if (searchPane != null) searchPane.setTheme(theme);
+        if (tv != null) tv.setTheme(theme);
 
         if (w == null) return;
         if (Build.VERSION.SDK_INT >= 30) {
@@ -343,6 +388,13 @@ public final class KeyboardService extends InputMethodService
         if (kv == null) return;
         kv.setLocale(locale());
         kv.setLayout(Layouts.get(lang, mode, prefs.numberRow, !prefs.globeRow), mode == Layouts.LETTERS);
+        String[] names = new String[prefs.langs.length];
+        int cur = 0;
+        for (int i = 0; i < names.length; i++) {
+            names[i] = Layouts.name(prefs.langs[i]);
+            if (prefs.langs[i].equals(lang)) cur = i;
+        }
+        kv.setLanguageMenu(names, cur);
         kv.setShift(shift);
         updateKeyLabels();
     }
@@ -352,6 +404,11 @@ public final class KeyboardService extends InputMethodService
         if (searching) {
             kv.setSpaceLabel(Layouts.space(lang));
             kv.setReturn(Layouts.returnLabel(lang, Layouts.SEARCH), true);
+            return;
+        }
+        if (translating) {
+            kv.setSpaceLabel(Layouts.space(lang));
+            kv.setReturn("Вставить", true);
             return;
         }
         if (romaji.length() > 0) {
@@ -414,6 +471,12 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onText(String s) {
+        if (translating) {
+            transInput.append(s);
+            transChanged();
+            afterChar();
+            return;
+        }
         if (searching) {
             searchQuery.append(s);
             searchPane.setQuery(searchQuery.toString());
@@ -472,6 +535,11 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onSpace() {
+        if (translating) {
+            transInput.append(' ');
+            transChanged();
+            return;
+        }
         if (searching) {
             onText(" ");
             return;
@@ -504,6 +572,10 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onReturn() {
+        if (translating) {
+            onTransInsert();
+            return;
+        }
         if (searching) {
             onClipSearchDone();
             return;
@@ -523,6 +595,14 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onDelete(boolean word) {
+        if (translating) {
+            if (transInput.length() > 0) {
+                int n = word ? wordDeleteLength(transInput) : 1;
+                transInput.setLength(Math.max(0, transInput.length() - Math.max(1, n)));
+                transChanged();
+            }
+            return;
+        }
         if (searching) {
             if (searchQuery.length() > 0) {
                 searchQuery.setLength(searchQuery.length() - 1);
@@ -595,7 +675,8 @@ public final class KeyboardService extends InputMethodService
     private void updateAutoShift() {
         if (kv == null || shift == KeyboardView.SHIFT_LOCK) return;
         boolean want = false;
-        if (prefs.autoCap && mode == Layouts.LETTERS && !isJa() && romaji.length() == 0 && !searching) {
+        if (prefs.autoCap && mode == Layouts.LETTERS && !isJa() && romaji.length() == 0 && !searching
+                && !translating) {
             InputConnection ic = getCurrentInputConnection();
             EditorInfo ei = getCurrentInputEditorInfo();
             if (ic != null && ei != null && ei.inputType != 0) {
@@ -822,6 +903,148 @@ public final class KeyboardService extends InputMethodService
         cv.show();
     }
 
+    // ---------------------------------------------------------------- language list (hold 🌐)
+
+    @Override
+    public void onLanguagePicked(int index) {
+        String[] langs = prefs.langs;
+        if (index < 0 || index >= langs.length || langs[index].equals(lang)) return;
+        InputConnection ic = getCurrentInputConnection();
+        if (ic != null && romaji.length() > 0) commitComposition(ic);
+        lang = langs[index];
+        prefs.setCurrentLang(lang);
+        mode = Layouts.LETTERS;
+        if (shift != KeyboardView.SHIFT_LOCK) shift = KeyboardView.SHIFT_OFF;
+        autoShifted = false;
+        refreshLayout();
+        updateAutoShift();
+        updateSuggestions();
+        if (kv != null) kv.flashLanguage(Layouts.name(lang));
+    }
+
+    // ---------------------------------------------------------------- translator (hold space)
+
+    @Override
+    public void onSpaceHold() {
+        if (translating) {
+            closeTranslator();
+            return;
+        }
+        InputConnection ic = getCurrentInputConnection();
+        if (ic != null && romaji.length() > 0) commitComposition(ic);
+        if (searching) onClipSearchDone();
+        if (ev != null) ev.hideNow();
+        if (cv != null) cv.hideNow();
+        translating = true;
+        transInput.setLength(0);
+        String dst = prefs.transDst;
+        if (dst.equals(prefs.transSrc)) dst = "en".equals(dst) ? "ru" : "en";
+        tv.reset();
+        tv.setLanguages(prefs.transSrc, dst);
+        tv.setVisibility(View.VISIBLE);
+        tv.setAlpha(0f);
+        tv.setTranslationY(tv.getHeight() > 0 ? tv.getHeight() * 0.3f : 60);
+        tv.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(EmojiView.EASE_OUT).start();
+        mode = Layouts.LETTERS;
+        refreshLayout();
+        updateAutoShift();
+        updateSuggestions();
+    }
+
+    private void closeTranslator() {
+        if (!translating) return;
+        translating = false;
+        handler.removeCallbacks(translateNow);
+        transReq++;
+        if (tv != null) {
+            tv.animate().cancel();
+            tv.setVisibility(View.GONE);
+        }
+        updateKeyLabels();
+        updateSuggestions();
+        updateAutoShift();
+    }
+
+    /** What the translator should translate (romaji is shown as kana when typing Japanese). */
+    private String transText() {
+        String t = transInput.toString();
+        return isJa() ? Romaji.toHiragana(t, true) : t;
+    }
+
+    private void transChanged() {
+        tv.setInput(transText());
+        handler.removeCallbacks(translateNow);
+        handler.postDelayed(translateNow, 280);
+    }
+
+    private void runTranslation() {
+        if (!translating) return;
+        final int req = ++transReq;
+        String src = prefs.transSrc;
+        String dst = prefs.transDst;
+        if (dst.equals(src)) dst = "en".equals(dst) ? "ru" : "en";
+        engine.translate(req, transText(), src, dst, lang, prefs.translatorWifiOnly, new TranslateEngine.Callback() {
+            @Override
+            public void onTranslated(int r, String detected, String text) {
+                if (r == transReq && translating) tv.setResult(text, detected);
+            }
+
+            @Override
+            public void onStatus(int r, String status) {
+                if (r == transReq && translating) tv.setStatus(status);
+            }
+        });
+    }
+
+    @Override
+    public void onTransInsert() {
+        String r = tv.result();
+        InputConnection ic = getCurrentInputConnection();
+        if (r.isEmpty() || ic == null) return;
+        CharSequence before = ic.getTextBeforeCursor(1, 0);
+        boolean needSpace = before != null && before.length() == 1 && !Character.isWhitespace(before.charAt(0));
+        ic.commitText((needSpace ? " " : "") + r, 1);
+        transInput.setLength(0);
+        tv.reset();
+        tv.setLanguages(prefs.transSrc, prefs.transDst);
+    }
+
+    @Override
+    public void onTransClose() {
+        closeTranslator();
+    }
+
+    @Override
+    public void onTransSwap() {
+        String src = prefs.transSrc, dst = prefs.transDst;
+        String newSrc = dst;
+        String newDst = "auto".equals(src) ? lang : src;
+        if (newDst.equals(newSrc)) newDst = "en".equals(newSrc) ? "ru" : "en";
+        prefs.putQuiet("trans_src", newSrc);
+        prefs.putQuiet("trans_dst", newDst);
+        prefs.reload();
+        // Typed text and its translation trade places, like in a translator app.
+        String res = tv.result();
+        transInput.setLength(0);
+        transInput.append(res);
+        tv.setLanguages(newSrc, newDst);
+        transChanged();
+    }
+
+    @Override
+    public void onTransLang(boolean source, String code) {
+        if (source) {
+            prefs.putQuiet("trans_src", code);
+            if (code.equals(prefs.transDst)) prefs.putQuiet("trans_dst", "en".equals(code) ? "ru" : "en");
+        } else {
+            prefs.putQuiet("trans_dst", code);
+            if (code.equals(prefs.transSrc)) prefs.putQuiet("trans_src", "auto");
+        }
+        prefs.reload();
+        tv.setLanguages(prefs.transSrc, prefs.transDst);
+        transChanged();
+    }
+
     // ---------------------------------------------------------------- suggestions
 
     /** Letters right before the cursor. */
@@ -850,7 +1073,7 @@ public final class KeyboardService extends InputMethodService
         String[] shown = new String[3];
         for (int i = 0; i < 3; i++) suggestionWords[i] = null;
         InputConnection ic = getCurrentInputConnection();
-        if (searching) {
+        if (searching || translating) {
             kv.setSuggestions(shown);
             return;
         }

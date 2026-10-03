@@ -112,7 +112,7 @@ final class EmojiView extends View {
         if (panelShader == null || shaderH != getHeight()) {
             shaderH = getHeight();
             panelShader = new LinearGradient(0, 0, 0, Math.max(1, shaderH),
-                    theme.bgTop | 0xFF000000, theme.bgBottom | 0xFF000000, Shader.TileMode.CLAMP);
+                    theme.panelTop(), theme.panelBottom(), Shader.TileMode.CLAMP);
         }
         fill.setShader(panelShader);
         c.drawRect(0, 0, getWidth(), getHeight(), fill);

@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Only vibration. No INTERNET permission: the keyboard cannot send anything anywhere. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Used only by the translator to download a language pack once (~30 MB per language).
+         Translation runs on the phone; typed text is never sent anywhere. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="false"

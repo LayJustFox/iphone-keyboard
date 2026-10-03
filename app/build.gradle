@@ -10,8 +10,8 @@ android {
         applicationId 'com.iphonekb'
         minSdk 26
         targetSdk 34
-        versionCode 3
-        versionName "2.1"
+        versionCode 4
+        versionName "3.0"
     }
 
     // The key lives in the repo so every build (GitHub or Android Studio)
@@ -44,4 +44,10 @@ android {
         checkReleaseBuilds false
         abortOnError false
     }
+}
+
+dependencies {
+    // On-device translation and language detection (models are downloaded once, text stays on the phone)
+    implementation 'com.google.mlkit:translate:17.0.3'
+    implementation 'com.google.mlkit:language-id:17.0.6'
 }

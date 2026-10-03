@@ -44,8 +44,9 @@ final class Prefs {
 
     // look
     String theme, style, accent;
-    int glassOpacity;       // 40..100 %
-    boolean blur;           // real blur of the app behind (Android 12+)
+    int glassOpacity;       // tint density of the glass, 0..100 %
+    boolean blur;           // live blur of the app behind (Android 12+)
+    int blurRadius;         // blur strength in dp
 
     // size
     String sizePreset;
@@ -66,6 +67,12 @@ final class Prefs {
     // typing
     boolean autoCap, doubleSpace, suggestions, trackpad;
     int dictGeneration;
+
+    // space-bar hold and translator
+    static final String HOLD_TRANSLATE = "translate", HOLD_TRACKPAD = "trackpad";
+    String spaceHold;
+    boolean translatorWifiOnly;
+    String transSrc, transDst;
 
     // clipboard
     boolean clipboard;
@@ -91,8 +98,10 @@ final class Prefs {
         theme = sp.getString("theme", THEME_AUTO);
         style = sp.getString("style", STYLE_GLASS);
         accent = sp.getString("accent", "blue");
-        glassOpacity = sp.getInt("glass_opacity", 78);
-        blur = sp.getBoolean("blur", false);
+        // "Transparency" in settings; the glass tint density is its opposite.
+        glassOpacity = 100 - sp.getInt("glass_transparency", 45);
+        blur = sp.getBoolean("blur", true);
+        blurRadius = sp.getInt("blur_radius", 32);
 
         sizePreset = sp.getString("size_preset", SIZE_AUTO);
         keyHeightPct = sp.getInt("key_height", 100);
@@ -119,6 +128,11 @@ final class Prefs {
         suggestions = sp.getBoolean("suggestions", true);
         trackpad = sp.getBoolean("trackpad", true);
         dictGeneration = sp.getInt("dict_gen", 0);
+
+        spaceHold = sp.getString("space_hold", HOLD_TRANSLATE);
+        translatorWifiOnly = sp.getBoolean("trans_wifi", false);
+        transSrc = sp.getString("trans_src", "auto");
+        transDst = sp.getString("trans_dst", "en");
 
         clipboard = sp.getBoolean("clipboard", true);
         clipMax = sp.getInt("clip_max", 5000);
@@ -162,6 +176,19 @@ final class Prefs {
     void setInt(String key, int v) {
         sp.edit().putInt(key, v).apply();
         reload();
+    }
+
+    /** Writes without reloading (used for values the keyboard changes while typing). */
+    void putQuiet(String key, String v) {
+        sp.edit().putString(key, v).apply();
+    }
+
+    void registerListener(SharedPreferences.OnSharedPreferenceChangeListener l) {
+        sp.registerOnSharedPreferenceChangeListener(l);
+    }
+
+    void unregisterListener(SharedPreferences.OnSharedPreferenceChangeListener l) {
+        sp.unregisterOnSharedPreferenceChangeListener(l);
     }
 
     void setString(String key, String v) {

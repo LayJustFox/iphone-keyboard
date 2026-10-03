@@ -247,7 +247,7 @@ final class KeyboardView extends View {
         for (Key[] row : l.rows) for (Key k : row) k.upper = k.label.toUpperCase(locale);
         layoutKeys();
         if (changed && animOn()) {
-            layoutT.v = 0.25f;
+            layoutT.v = 0f;
             layoutT.target = 1;
         }
         caseT.target = upper() ? 1 : 0;
@@ -346,18 +346,18 @@ final class KeyboardView extends View {
             snapAll();
             return false;
         }
-        float base = prefs.animSpeed == Prefs.ANIM_FAST ? 0.55f : 1f;
+        float base = prefs.animSpeed == Prefs.ANIM_FAST ? 0.6f : 1.35f;
         boolean moving = false;
         moving |= ease(caseT, dt, 55 * base);
         moving |= ease(labelsT, dt, 70 * base);
         moving |= ease(flashT, dt, (flashT.target > flashT.v ? 60 : 160) * base);
         moving |= ease(bubbleT, dt, 26 * base);
         moving |= ease(altsT, dt, 45 * base);
-        moving |= ease(layoutT, dt, 40 * base);
+        moving |= ease(layoutT, dt, 55 * base);
         moving |= ease(accentT, dt, 70 * base);
         moving |= ease(shiftT, dt, 45 * base);
         moving |= ease(stripT, dt, 70 * base);
-        moving |= ease(menuT, dt, 45 * base);
+        moving |= ease(menuT, dt, 55 * base);
         if (layout != null) {
             for (Key[] row : layout.rows) {
                 for (Key k : row) moving |= easeKey(k, dt, base);
@@ -381,7 +381,7 @@ final class KeyboardView extends View {
     private static boolean easeKey(Key k, float dt, float base) {
         if (k.press == k.pressTarget) return false;
         // Presses light up almost instantly; releases fade out gently.
-        float tau = (k.pressTarget > k.press ? 16 : 90) * base;
+        float tau = k.pressTarget > k.press ? 14 : 95 * base;
         float f = 1f - (float) Math.exp(-dt / tau);
         k.press += (k.pressTarget - k.press) * f;
         if (Math.abs(k.pressTarget - k.press) < 0.003f) {
@@ -488,8 +488,16 @@ final class KeyboardView extends View {
             y += kh + m.vGap;
         }
         float gw = Math.min(dp(64), W / 5);
-        globeKey.rect.set(dp(8), globeTop, dp(8) + gw - dp(16), globeTop + globeZone);
-        globeKey.hit.set(0, globeTop, gw, globeTop + globeZone);
+        Key ret = returnKey();
+        if (prefs.globeRight && ret != null) {
+            // 🌐 right under the return key.
+            float cx = ret.rect.centerX();
+            globeKey.rect.set(cx - gw / 2 + dp(8), globeTop, cx + gw / 2 - dp(8), globeTop + globeZone);
+            globeKey.hit.set(Math.min(ret.rect.left, cx - gw / 2), globeTop, W, globeTop + globeZone);
+        } else {
+            globeKey.rect.set(dp(8), globeTop, dp(8) + gw - dp(16), globeTop + globeZone);
+            globeKey.hit.set(0, globeTop, gw, globeTop + globeZone);
+        }
         refreshLabels();
         refreshStrip();
     }
@@ -995,7 +1003,8 @@ final class KeyboardView extends View {
         w = Math.min(w, getWidth() - 2 * m.side);
         menuRowH = dp(44);
         float h = menuItems.length * menuRowH + dp(8);
-        float left = Math.max(m.side, Math.min(anchor.rect.left, getWidth() - m.side - w));
+        float wantLeft = anchor.rect.centerX() > getWidth() / 2f ? anchor.rect.right - w : anchor.rect.left;
+        float left = Math.max(m.side, Math.min(wantLeft, getWidth() - m.side - w));
         float bottom = anchor.rect.top - dp(6);
         float top = Math.max(dp(2), bottom - h);
         menuRect.set(left, top, left + w, top + h);
@@ -1034,7 +1043,9 @@ final class KeyboardView extends View {
     private void drawMenu(Canvas c, float t) {
         float s = 0.85f + 0.15f * t;
         c.save();
-        c.scale(s, s, menuRect.left + dp(20), menuRect.bottom);
+        float px = menuAnchor != null && menuAnchor.rect.centerX() > getWidth() / 2f
+                ? menuRect.right - dp(20) : menuRect.left + dp(20);
+        c.scale(s, s, px, menuRect.bottom);
         float r = dp(14);
         // shadow
         fill.setColor(alpha(theme.dark ? 0x80000000 : 0x33202A3A, t));
@@ -1312,12 +1323,12 @@ final class KeyboardView extends View {
                 text.setTextSize(Math.min(m.letterSize, r.width() * 0.8f));
                 if (lettersMode && caseT.v > 0.001f && caseT.v < 0.999f) {
                     text.setColor(alpha(fg, la * (1f - caseT.v)));
-                    drawCentered(c, k.label, cx, cy - dp(1));
+                    drawCentered(c, k.label, cx, cy - dp(1) + rise());
                     text.setColor(alpha(fg, la * caseT.v));
-                    drawCentered(c, k.upper, cx, cy - dp(1));
+                    drawCentered(c, k.upper, cx, cy - dp(1) + rise());
                 } else {
                     text.setColor(col);
-                    drawCentered(c, lettersMode && caseT.v >= 0.999f ? k.upper : k.label, cx, cy - dp(1));
+                    drawCentered(c, lettersMode && caseT.v >= 0.999f ? k.upper : k.label, cx, cy - dp(1) + rise());
                 }
                 break;
             case Key.SHIFT:
@@ -1404,6 +1415,12 @@ final class KeyboardView extends View {
         glowShader.setLocalMatrix(matrix);
         glowPaint.setAlpha(Math.round(255 * p));
         c.drawRoundRect(r, m.radius, m.radius, glowPaint);
+    }
+
+    /** Small upward glide of the labels while a new page fades in. */
+    private float rise() {
+        float t = 1f - layoutT.v;
+        return t <= 0f ? 0f : t * t * dp(5);
     }
 
     private void drawCentered(Canvas c, CharSequence s, float cx, float cy) {

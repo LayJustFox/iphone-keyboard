@@ -54,6 +54,7 @@ final class Prefs {
     int keyHeightPct, fontPct, hGapPct, vGapPct, radiusPct; // 50..150 %
     int sidePadDp, bottomPadDp;
     boolean globeRow;       // iPhone-style strip with 🌐 under the keys
+    boolean globeRight;     // 🌐 under the return key instead of bottom-left
     boolean numberRow;
     boolean limitHeight;    // never taller than ~45% of the screen
 
@@ -88,6 +89,11 @@ final class Prefs {
     }
 
     void reload() {
+        if (!sp.getBoolean("m_transparency50", false)) {
+            // One-time: background and keys at 50% transparency.
+            sp.edit().putInt("glass_transparency", 50).putInt("key_transparency", 50)
+                    .putBoolean("m_transparency50", true).apply();
+        }
         String raw = sp.getString("langs", "ru,en");
         ArrayList<String> list = new ArrayList<>();
         for (String l : Layouts.ALL_LANGS) {
@@ -102,10 +108,10 @@ final class Prefs {
         style = sp.getString("style", STYLE_GLASS);
         accent = sp.getString("accent", "blue");
         // "Transparency" in settings; the glass tint density is its opposite.
-        glassOpacity = 100 - sp.getInt("glass_transparency", 45);
+        glassOpacity = 100 - sp.getInt("glass_transparency", 50);
         blur = sp.getBoolean("blur", true);
         blurRadius = sp.getInt("blur_radius", 32);
-        keyTransparency = sp.getInt("key_transparency", 0);
+        keyTransparency = sp.getInt("key_transparency", 50);
 
         sizePreset = sp.getString("size_preset", SIZE_AUTO);
         keyHeightPct = sp.getInt("key_height", 100);
@@ -116,6 +122,7 @@ final class Prefs {
         sidePadDp = sp.getInt("side_pad", 3);
         bottomPadDp = sp.getInt("bottom_pad", 4);
         globeRow = sp.getBoolean("globe_row", true);
+        globeRight = sp.getBoolean("globe_right", true);
         numberRow = sp.getBoolean("number_row", false);
         limitHeight = sp.getBoolean("limit_height", true);
 

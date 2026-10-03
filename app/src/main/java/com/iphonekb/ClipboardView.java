@@ -170,17 +170,17 @@ final class ClipboardView extends View {
         listVersion = -1;
         setVisibility(VISIBLE);
         setAlpha(0f);
-        setTranslationY(dp(36));
-        setScaleX(0.97f);
-        setScaleY(0.97f);
-        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(320)
+        setTranslationY(dp(44));
+        setScaleX(0.96f);
+        setScaleY(0.96f);
+        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(430)
                 .setInterpolator(EmojiView.EASE_OUT).start();
     }
 
     void hide() {
         if (getVisibility() != VISIBLE) return;
         animate().cancel();
-        animate().alpha(0f).translationY(dp(36)).scaleX(0.97f).scaleY(0.97f).setDuration(200)
+        animate().alpha(0f).translationY(dp(44)).scaleX(0.96f).scaleY(0.96f).setDuration(270)
                 .setInterpolator(EmojiView.EASE_IN)
                 .withEndAction(new Runnable() {
                     @Override

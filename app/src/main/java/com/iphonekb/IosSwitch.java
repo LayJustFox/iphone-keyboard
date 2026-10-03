@@ -46,7 +46,7 @@ final class IosSwitch extends View {
         checked = !checked;
         if (anim != null) anim.cancel();
         anim = ValueAnimator.ofFloat(pos, checked ? 1f : 0f);
-        anim.setDuration(240);
+        anim.setDuration(300);
         anim.setInterpolator(EmojiView.EASE_OUT);
         anim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
             @Override

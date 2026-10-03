@@ -95,8 +95,8 @@ final class EmojiView extends View {
     private int shaderH;
 
     /** iOS-like ease-out curves for opening and closing. */
-    static final PathInterpolator EASE_OUT = new PathInterpolator(0.2f, 0.9f, 0.1f, 1f);
-    static final PathInterpolator EASE_IN = new PathInterpolator(0.4f, 0f, 0.9f, 0.5f);
+    static final PathInterpolator EASE_OUT = new PathInterpolator(0.32f, 0.72f, 0f, 1f);
+    static final PathInterpolator EASE_IN = new PathInterpolator(0.4f, 0f, 0.8f, 0.6f);
 
     void setTheme(Theme t) {
         theme = t;
@@ -152,17 +152,17 @@ final class EmojiView extends View {
         animate().cancel();
         setVisibility(VISIBLE);
         setAlpha(0f);
-        setTranslationY(dp(36));
-        setScaleX(0.97f);
-        setScaleY(0.97f);
-        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(320)
+        setTranslationY(dp(44));
+        setScaleX(0.96f);
+        setScaleY(0.96f);
+        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(430)
                 .setInterpolator(EASE_OUT).start();
     }
 
     void hide() {
         if (getVisibility() != VISIBLE) return;
         animate().cancel();
-        animate().alpha(0f).translationY(dp(36)).scaleX(0.97f).scaleY(0.97f).setDuration(200)
+        animate().alpha(0f).translationY(dp(44)).scaleX(0.96f).scaleY(0.96f).setDuration(270)
                 .setInterpolator(EASE_IN)
                 .withEndAction(new Runnable() {
                     @Override
@@ -441,7 +441,7 @@ final class EmojiView extends View {
                     if (tab >= 0 && tab < secX.length) {
                         float target = Math.max(0, Math.min(maxPos, secX[tab] - padX));
                         scroller.forceFinished(true);
-                        scroller.startScroll((int) pos, 0, (int) (target - pos), 0, 320);
+                        scroller.startScroll((int) pos, 0, (int) (target - pos), 0, 450);
                         postInvalidateOnAnimation();
                     }
                 } else if (pressSec >= 0 && pressIdx >= 0) {

@@ -141,8 +141,8 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         if (!animate || under == null) return;
         float w = host.getWidth() > 0 ? host.getWidth() : getResources().getDisplayMetrics().widthPixels;
         page.setTranslationX(w);
-        page.animate().translationX(0).setDuration(380).setInterpolator(EmojiView.EASE_OUT).start();
-        under.animate().translationX(-w * 0.3f).alpha(0.9f).setDuration(380).setInterpolator(EmojiView.EASE_OUT)
+        page.animate().translationX(0).setDuration(460).setInterpolator(EmojiView.EASE_OUT).start();
+        under.animate().translationX(-w * 0.3f).setDuration(460).setInterpolator(EmojiView.EASE_OUT)
                 .setListener(new AnimatorListenerAdapter() {
                     @Override
                     public void onAnimationEnd(Animator a) {
@@ -157,9 +157,9 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         View under = stack.get(stack.size() - 1);
         float w = host.getWidth();
         under.setVisibility(View.VISIBLE);
-        under.animate().setListener(null).translationX(0).alpha(1f).setDuration(340)
+        under.animate().setListener(null).translationX(0).alpha(1f).setDuration(420)
                 .setInterpolator(EmojiView.EASE_OUT).start();
-        top.animate().translationX(w).setDuration(340).setInterpolator(EmojiView.EASE_OUT)
+        top.animate().translationX(w).setDuration(420).setInterpolator(EmojiView.EASE_OUT)
                 .withEndAction(new Runnable() {
                     @Override
                     public void run() {
@@ -233,6 +233,9 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
                 ViewGroup.LayoutParams.MATCH_PARENT));
         dock.addView(preview, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
+        // Soft fade-in instead of a hard first frame.
+        dock.setAlpha(0f);
+        dock.animate().alpha(1f).setStartDelay(120).setDuration(320).setInterpolator(EmojiView.EASE_OUT).start();
     }
 
     private LinearLayout column() {
@@ -432,6 +435,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
 
         LinearLayout lay = group(col, "Раскладка");
         switchRow(lay, "🌐 внизу, рядом с полоской навигации", "globe_row", prefs.globeRow);
+        switchRow(lay, "🌐 под клавишей ввода (справа)", "globe_right", prefs.globeRight);
         switchRow(lay, "Ряд цифр над буквами", "number_row", prefs.numberRow);
         switchRow(lay, "Оптимизация размера", "limit_height", prefs.limitHeight);
         footer(col, "Оптимизация не даёт клавиатуре занять больше 45% экрана. Если 🌐 внизу "

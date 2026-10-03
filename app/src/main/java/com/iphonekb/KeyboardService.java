@@ -57,6 +57,12 @@ public final class KeyboardService extends InputMethodService
     private AudioManager audio;
     private ClipboardManager clipboardManager;
     private boolean translucent;
+    // Window state actually applied (so nothing is re-applied when unchanged — avoids flashes).
+    private boolean windowTranslucent, edgeToEdgeDone;
+    private int appliedBlurPx = -1;
+    private boolean clipBlur;          // stronger blur while the clipboard is open
+    private boolean blurAvailable = true;
+    private Object blurListener;
 
     private String lang = "ru";
     private int mode = Layouts.LETTERS;
@@ -240,6 +246,7 @@ public final class KeyboardService extends InputMethodService
 
         if (ev != null) ev.hideNow();
         if (cv != null) cv.hideNow();
+        clipBlur = false;
         if (searchPane != null) searchPane.setVisibility(View.GONE);
         if (cv != null) cv.setEnabledHistory(prefs.clipboard);
         if (kv != null) kv.cancelTouch();
@@ -265,7 +272,13 @@ public final class KeyboardService extends InputMethodService
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public void onDestroy() {
+        if (Build.VERSION.SDK_INT >= 31 && blurListener != null) {
+            WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+            if (wm != null) wm.removeCrossWindowBlurEnabledListener(
+                    (java.util.function.Consumer<Boolean>) blurListener);
+        }
         if (clipboardManager != null) clipboardManager.removePrimaryClipChangedListener(clipListener);
         prefs.unregisterListener(prefListener);
         engine.close();
@@ -317,24 +330,56 @@ public final class KeyboardService extends InputMethodService
                 == Configuration.UI_MODE_NIGHT_YES;
     }
 
+    private int blurPx() {
+        int dp = prefs.blurRadius;
+        if (clipBlur) dp = Math.min(150, Math.max(dp * 2, dp + 40)); // frostier behind the clipboard
+        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp,
+                getResources().getDisplayMetrics()));
+    }
+
+    private void setBlur(Window w, int px) {
+        if (Build.VERSION.SDK_INT < 31 || px == appliedBlurPx) return;
+        w.setBackgroundBlurRadius(px);
+        appliedBlurPx = px;
+    }
+
+    /** Android can switch live blur off for a moment (transitions, battery saver): follow it. */
+    private void watchBlur() {
+        if (Build.VERSION.SDK_INT < 31 || blurListener != null) return;
+        WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        if (wm == null) return;
+        java.util.function.Consumer<Boolean> l = new java.util.function.Consumer<Boolean>() {
+            @Override
+            public void accept(Boolean enabled) {
+                if (enabled == blurAvailable) return;
+                blurAvailable = enabled;
+                applyTheme();
+            }
+        };
+        blurListener = l;
+        wm.addCrossWindowBlurEnabledListener(l);
+        blurAvailable = wm.isCrossWindowBlurEnabled();
+    }
+
     private void applyTheme() {
         Dialog d = getWindow();
         Window w = d == null ? null : d.getWindow();
 
-        // Real blur of the app behind the keyboard (Android 12+, if the phone supports it).
+        // Live blur of the app behind the keyboard (Android 12+, if the phone supports it).
         translucent = false;
         if (w != null && Build.VERSION.SDK_INT >= 31) {
-            WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
-            boolean can = wm != null && wm.isCrossWindowBlurEnabled();
-            boolean want = prefs.blur && can && Prefs.STYLE_GLASS.equals(prefs.style);
+            watchBlur();
+            boolean want = prefs.blur && blurAvailable && Prefs.STYLE_GLASS.equals(prefs.style);
             if (want) {
-                w.setFormat(PixelFormat.TRANSLUCENT);
-                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-                w.setBackgroundBlurRadius(Math.round(TypedValue.applyDimension(
-                        TypedValue.COMPLEX_UNIT_DIP, prefs.blurRadius, getResources().getDisplayMetrics())));
+                if (!windowTranslucent) {
+                    w.setFormat(PixelFormat.TRANSLUCENT);
+                    w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+                    windowTranslucent = true;
+                }
+                setBlur(w, blurPx());
                 translucent = true;
             } else {
-                w.setBackgroundBlurRadius(0);
+                setBlur(w, 0);
             }
         }
 
@@ -350,15 +395,18 @@ public final class KeyboardService extends InputMethodService
         if (Build.VERSION.SDK_INT >= 30) {
             // Draw under the navigation bar like iOS draws under the home indicator, instead of
             // leaving an empty band between the keys and the bar.
-            w.setDecorFitsSystemWindows(false);
+            if (!edgeToEdgeDone) {
+                w.setDecorFitsSystemWindows(false);
+                w.setNavigationBarColor(Color.TRANSPARENT);
+                w.setNavigationBarContrastEnforced(false);
+                edgeToEdgeDone = true;
+            }
             WindowManager.LayoutParams lp = w.getAttributes();
             int types = lp.getFitInsetsTypes() & ~WindowInsets.Type.navigationBars();
             if (types != lp.getFitInsetsTypes()) {
                 lp.setFitInsetsTypes(types);
                 w.setAttributes(lp);
             }
-            w.setNavigationBarColor(Color.TRANSPARENT);
-            w.setNavigationBarContrastEnforced(false);
         } else {
             w.setNavigationBarColor(translucent ? Color.TRANSPARENT : theme.solidBg());
         }
@@ -862,7 +910,16 @@ public final class KeyboardService extends InputMethodService
         if (cv == null) return;
         cv.setAbcLabel(Layouts.abc(lang));
         cv.setEnabledHistory(prefs.clipboard);
+        setClipBlur(true);
         cv.show();
+    }
+
+    private void setClipBlur(boolean on) {
+        if (clipBlur == on) return;
+        clipBlur = on;
+        Dialog d = getWindow();
+        Window w = d == null ? null : d.getWindow();
+        if (w != null && translucent) setBlur(w, blurPx());
     }
 
     @Override
@@ -877,6 +934,7 @@ public final class KeyboardService extends InputMethodService
     @Override
     public void onClipClose() {
         if (cv != null) cv.hide();
+        setClipBlur(false);
         updateAutoShift();
     }
 
@@ -944,6 +1002,7 @@ public final class KeyboardService extends InputMethodService
         if (searching) onClipSearchDone();
         if (ev != null) ev.hideNow();
         if (cv != null) cv.hideNow();
+        setClipBlur(false);
         translating = true;
         transInput.setLength(0);
         String dst = prefs.transDst;
@@ -953,7 +1012,7 @@ public final class KeyboardService extends InputMethodService
         tv.setVisibility(View.VISIBLE);
         tv.setAlpha(0f);
         tv.setTranslationY(tv.getHeight() > 0 ? tv.getHeight() * 0.3f : 60);
-        tv.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(EmojiView.EASE_OUT).start();
+        tv.animate().alpha(1f).translationY(0f).setDuration(400).setInterpolator(EmojiView.EASE_OUT).start();
         mode = Layouts.LETTERS;
         refreshLayout();
         updateAutoShift();

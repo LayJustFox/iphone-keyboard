@@ -12,9 +12,9 @@ final class Theme {
     // Panel (keyboard background) – a vertical gradient for glass.
     final int bg, bgTop, bgBottom;
     // Letter keys / space: top, middle, bottom of the fill gradient.
-    final int keyTop, keyMid, keyBottom;
+    int keyTop, keyMid, keyBottom;
     // Shift, delete, 123, emoji, return.
-    final int specTop, specMid, specBottom;
+    int specTop, specMid, specBottom;
     // Rim highlight (top → bottom) and shadow.
     final int rimTop, rimBottom, shadow;
     // Pressed overlay: specials light up, space dims.
@@ -24,7 +24,7 @@ final class Theme {
 
     final int text, accent, accentText, shiftOnBg, shiftOnFg, separator, dim, highlight, glow;
 
-    private Theme(boolean dark, boolean glass, int accent, int panelAlpha, boolean live) {
+    private Theme(boolean dark, boolean glass, int accent, int panelAlpha, boolean live, float keyAlpha) {
         this.dark = dark;
         this.glass = glass;
         this.live = live;
@@ -105,14 +105,27 @@ final class Theme {
             highlight = 0x29FFFFFF;
             glow = 0xFFFFFFFF;
         }
+        if (keyAlpha < 1f) {
+            keyTop = scaleAlpha(keyTop, keyAlpha);
+            keyMid = scaleAlpha(keyMid, keyAlpha);
+            keyBottom = scaleAlpha(keyBottom, keyAlpha);
+            specTop = scaleAlpha(specTop, keyAlpha);
+            specMid = scaleAlpha(specMid, keyAlpha);
+            specBottom = scaleAlpha(specBottom, keyAlpha);
+        }
     }
 
-    static Theme create(boolean dark, boolean glass, int accent, int panelAlpha, boolean live) {
-        return new Theme(dark, glass, accent, Math.max(0, Math.min(255, panelAlpha)), live);
+    private static int scaleAlpha(int c, float f) {
+        int a = Math.round(((c >>> 24) & 0xFF) * f);
+        return (c & 0x00FFFFFF) | (a << 24);
+    }
+
+    static Theme create(boolean dark, boolean glass, int accent, int panelAlpha, boolean live, float keyAlpha) {
+        return new Theme(dark, glass, accent, Math.max(0, Math.min(255, panelAlpha)), live, keyAlpha);
     }
 
     static Theme light() {
-        return create(false, true, 0xFF007AFF, 255, false);
+        return create(false, true, 0xFF007AFF, 255, false, 1f);
     }
 
     /** Panel colour for overlays (emoji, clipboard, translator): see-through on live glass. */
@@ -135,6 +148,7 @@ final class Theme {
         boolean glass = Prefs.STYLE_GLASS.equals(p.style);
         // Live glass: the tint gets denser as "transparency" goes down; never fully clear.
         int alpha = translucent ? Math.round(255 * (0.08f + 0.92f * p.glassOpacity / 100f)) : 255;
-        return create(dark, glass, p.accentColor(dark), alpha, translucent && glass);
+        float keyAlpha = 1f - Math.max(0, Math.min(80, p.keyTransparency)) / 100f;
+        return create(dark, glass, p.accentColor(dark), alpha, translucent && glass, keyAlpha);
     }
 }

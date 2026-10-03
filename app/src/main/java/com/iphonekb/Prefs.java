@@ -47,6 +47,7 @@ final class Prefs {
     int glassOpacity;       // tint density of the glass, 0..100 %
     boolean blur;           // live blur of the app behind (Android 12+)
     int blurRadius;         // blur strength in dp
+    int keyTransparency;    // 0..80 %, how see-through the keys are
 
     // size
     String sizePreset;
@@ -71,6 +72,8 @@ final class Prefs {
     // space-bar hold and translator
     static final String HOLD_TRANSLATE = "translate", HOLD_TRACKPAD = "trackpad";
     String spaceHold;
+    static final String SWIPE_CURSOR = "cursor", SWIPE_LANG = "lang";
+    String spaceSwipe;      // swipe along the space bar: move cursor or change language
     boolean translatorWifiOnly;
     String transSrc, transDst;
 
@@ -102,6 +105,7 @@ final class Prefs {
         glassOpacity = 100 - sp.getInt("glass_transparency", 45);
         blur = sp.getBoolean("blur", true);
         blurRadius = sp.getInt("blur_radius", 32);
+        keyTransparency = sp.getInt("key_transparency", 0);
 
         sizePreset = sp.getString("size_preset", SIZE_AUTO);
         keyHeightPct = sp.getInt("key_height", 100);
@@ -130,6 +134,7 @@ final class Prefs {
         dictGeneration = sp.getInt("dict_gen", 0);
 
         spaceHold = sp.getString("space_hold", HOLD_TRANSLATE);
+        spaceSwipe = sp.getString("space_swipe", SWIPE_CURSOR);
         translatorWifiOnly = sp.getBoolean("trans_wifi", false);
         transSrc = sp.getString("trans_src", "auto");
         transDst = sp.getString("trans_dst", "en");

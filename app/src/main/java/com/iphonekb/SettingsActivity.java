@@ -381,7 +381,8 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         addRow(gl, support, 16);
         switchRow(gl, "Размытие фона", "blur", prefs.blur);
         slider(gl, "Сила размытия", "blur_radius", 0, 80, prefs.blurRadius, " dp");
-        slider(gl, "Прозрачность", "glass_transparency", 0, 92, 100 - prefs.glassOpacity, "%");
+        slider(gl, "Прозрачность фона", "glass_transparency", 0, 92, 100 - prefs.glassOpacity, "%");
+        slider(gl, "Прозрачность клавиш", "key_transparency", 0, 80, prefs.keyTransparency, "%");
         footer(col, "Как на iPhone: под клавиатурой в реальном времени размывается то, что на экране, "
                 + "и всё меняется на лету. Внизу — живой предпросмотр поверх движущейся картинки. "
                 + "Размытие работает в стиле Liquid Glass.");
@@ -480,6 +481,11 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         switchRow(g, "Пробел как трекпад", "trackpad", prefs.trackpad);
         footer(col, "Двойной пробел ставит точку и пробел. Удержание пробела превращает "
                 + "клавиатуру в трекпад для курсора.");
+        LinearLayout sw = group(col, "Свайп по пробелу");
+        choices(sw, new String[]{"Двигает курсор", "Меняет язык"},
+                new String[]{Prefs.SWIPE_CURSOR, Prefs.SWIPE_LANG}, prefs.spaceSwipe, "space_swipe");
+        footer(col, "Проведите по 🌐 вправо — следующий язык, влево — предыдущий. Удержание 🌐 "
+                + "показывает список языков.");
         LinearLayout lp = group(col, null);
         slider(lp, "Задержка удержания", "long_press", 200, 700, prefs.longPressMs, " мс");
         LinearLayout w = group(col, null);
@@ -943,4 +949,10 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         }
     }
     @Override public void onSpaceHold() { }
+    @Override public void onLanguageSwipe(int direction) {
+        String[] l = prefs.langs;
+        int idx = 0;
+        for (int i = 0; i < l.length; i++) if (l[i].equals(prefs.currentLang)) idx = i;
+        onLanguagePicked(((idx + direction) % l.length + l.length) % l.length);
+    }
 }

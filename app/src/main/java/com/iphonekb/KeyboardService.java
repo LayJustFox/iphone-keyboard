@@ -922,6 +922,15 @@ public final class KeyboardService extends InputMethodService
         if (kv != null) kv.flashLanguage(Layouts.name(lang));
     }
 
+    @Override
+    public void onLanguageSwipe(int direction) {
+        String[] langs = prefs.langs;
+        if (langs.length <= 1) return;
+        int idx = 0;
+        for (int i = 0; i < langs.length; i++) if (langs[i].equals(lang)) idx = i;
+        onLanguagePicked(((idx + direction) % langs.length + langs.length) % langs.length);
+    }
+
     // ---------------------------------------------------------------- translator (hold space)
 
     @Override

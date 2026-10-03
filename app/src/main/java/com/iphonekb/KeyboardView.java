@@ -52,6 +52,8 @@ final class KeyboardView extends View {
         void onQuickPaste();
         void onLanguagePicked(int index);
         void onSpaceHold();
+        /** Swipe on 🌐 (or along space): +1 next language, -1 previous. */
+        void onLanguageSwipe(int direction);
     }
 
     static final int SHIFT_OFF = 0, SHIFT_ON = 1, SHIFT_LOCK = 2;
@@ -828,7 +830,22 @@ final class KeyboardView extends View {
             downKey.touchY = y;
             if (downKey.type != Key.CHAR) invalidate();
         }
-        if (downKey.type == Key.SPACE && prefs.trackpad && Math.abs(x - downX) > dp(18)) {
+        if (downKey.type == Key.GLOBE && !longFired && Math.abs(x - downX) > dp(22)) {
+            // Swipe 🌐 right = next language, left = previous one.
+            handler.removeCallbacks(longPress);
+            longFired = true;
+            listener.onLanguageSwipe(x > downX ? 1 : -1);
+            return;
+        }
+        if (downKey.type == Key.SPACE && !longFired && Prefs.SWIPE_LANG.equals(prefs.spaceSwipe)
+                && Math.abs(x - downX) > dp(40)) {
+            handler.removeCallbacks(longPress);
+            longFired = true;
+            listener.onLanguageSwipe(x > downX ? 1 : -1);
+            return;
+        }
+        if (downKey.type == Key.SPACE && !longFired && prefs.trackpad
+                && !Prefs.SWIPE_LANG.equals(prefs.spaceSwipe) && Math.abs(x - downX) > dp(18)) {
             // A swipe along the space bar also moves the cursor.
             handler.removeCallbacks(longPress);
             startTrackpad();
@@ -900,7 +917,7 @@ final class KeyboardView extends View {
                 if (slideBack) listener.onSlideReturn();
                 break;
             case Key.SPACE:
-                if (inside) listener.onSpace();
+                if (inside && !wasLong) listener.onSpace(); // not after hold (translator) or swipe
                 break;
             case Key.RETURN:
                 if (inside) listener.onReturn();

@@ -34,6 +34,14 @@ final class Backdrop extends View {
         invalidate();
     }
 
+    @Override
+    protected void onMeasure(int w, int h) {
+        // Never ask for height of its own: it only fills the space the keyboard preview takes.
+        // (Asking for "as much as possible" made the preview cover the whole settings page.)
+        int height = MeasureSpec.getMode(h) == MeasureSpec.EXACTLY ? MeasureSpec.getSize(h) : 0;
+        setMeasuredDimension(MeasureSpec.getSize(w), height);
+    }
+
     /** @param radiusDp blur strength; 0 = sharp */
     void setBlur(int radiusDp) {
         if (Build.VERSION.SDK_INT < 31) return;

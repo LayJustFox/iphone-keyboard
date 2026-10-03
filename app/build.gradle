@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.iphonekb'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.iphonekb'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // The key lives in the repo so every build (GitHub or Android Studio)
+    // is signed the same way and installs over the previous version.
+    signingConfigs {
+        release {
+            storeFile file('keyboard.jks')
+            storePassword 'iphonekb'
+            keyAlias 'keyboard'
+            keyPassword 'iphonekb'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}

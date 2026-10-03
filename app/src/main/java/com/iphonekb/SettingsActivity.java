@@ -173,6 +173,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
                     }
                 }).start();
         if (stack.size() == 1) refreshRootValues();
+        else if (stack.size() == 2 && onBackRefresh != null) onBackRefresh.run();
         // The preview may need to move back to the page underneath.
         dockPreview(under);
     }
@@ -570,19 +571,169 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         return page("Буфер обмена", col, false);
     }
 
+    private Runnable onBackRefresh;
+
     private View translatorPage() {
         LinearLayout col = column();
         LinearLayout h = group(col, "Удержание пробела");
         choices(h, new String[]{"Открывает переводчик", "Включает трекпад"},
                 new String[]{Prefs.HOLD_TRANSLATE, Prefs.HOLD_TRACKPAD}, prefs.spaceHold, "space_hold");
         footer(col, "Проведите пальцем по пробелу — курсор двигается в любом режиме.");
-        LinearLayout g = group(col, "Языковые пакеты");
+
+        LinearLayout def = group(col, "Языки по умолчанию");
+        final TextView vFrom = nav(def, 0xFF5856D6, "⇢", "Переводить с", new Runnable() {
+            @Override
+            public void run() {
+                push(langPickPage(true), true);
+            }
+        });
+        final TextView vTo = nav(def, 0xFFFF9500, "⇠", "Переводить на", new Runnable() {
+            @Override
+            public void run() {
+                push(langPickPage(false), true);
+            }
+        });
+        onBackRefresh = new Runnable() {
+            @Override
+            public void run() {
+                prefs.reload();
+                vFrom.setText(TranslateEngine.name(prefs.transSrc));
+                vTo.setText(TranslateEngine.name(prefs.transDst));
+            }
+        };
+        onBackRefresh.run();
+
+        final LinearLayout packs = group(col, "Языковые пакеты");
+        final java.util.HashMap<String, TextView> status = new java.util.HashMap<>();
+        final java.util.HashMap<String, LoadingBar> bars = new java.util.HashMap<>();
+        final java.util.HashSet<String> have = new java.util.HashSet<>();
+        final Runnable[] refresh = new Runnable[1];
+        for (final String[] lang : TranslateEngine.LANGS) {
+            if ("auto".equals(lang[0]) || !LanguagePacks.supported(lang[0])) continue;
+            LinearLayout wrap = new LinearLayout(this);
+            wrap.setOrientation(LinearLayout.VERTICAL);
+            wrap.setPadding(dp(16), dp(11), dp(16), dp(11));
+            LinearLayout top = new LinearLayout(this);
+            top.setOrientation(LinearLayout.HORIZONTAL);
+            top.setGravity(Gravity.CENTER_VERTICAL);
+            top.addView(title(lang[1]), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView st = new TextView(this);
+            st.setTextSize(15);
+            st.setTextColor(secondary());
+            top.addView(st);
+            wrap.addView(top);
+            LoadingBar bar = new LoadingBar(this);
+            bar.setColors(dark ? 0xFF3A3A3C : 0xFFE5E5EA, Theme.isLight(accent()) && !dark ? 0xFF8E8E93 : accent());
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            bl.setMargins(0, dp(8), 0, 0);
+            wrap.addView(bar, bl);
+            bar.setRunning(false);
+            status.put(lang[0], st);
+            bars.put(lang[0], bar);
+            pressable(wrap, new Runnable() {
+                @Override
+                public void run() {
+                    final String code = lang[0];
+                    if (LanguagePacks.DOWNLOADING.contains(code)) return;
+                    if (have.contains(code)) {
+                        new android.app.AlertDialog.Builder(SettingsActivity.this)
+                                .setTitle("Удалить «" + lang[1] + "»?")
+                                .setMessage("Пакет можно будет скачать снова в любой момент.")
+                                .setNegativeButton("Отмена", null)
+                                .setPositiveButton("Удалить", new android.content.DialogInterface.OnClickListener() {
+                                    @Override
+                                    public void onClick(android.content.DialogInterface d, int w) {
+                                        LanguagePacks.delete(code, new LanguagePacks.Listener() {
+                                            @Override
+                                            public void onDone(boolean ok) {
+                                                if (!ok) Toast.makeText(SettingsActivity.this,
+                                                        "Этот пакет удалить нельзя", Toast.LENGTH_SHORT).show();
+                                                refresh[0].run();
+                                            }
+                                        });
+                                    }
+                                }).show();
+                        return;
+                    }
+                    LanguagePacks.download(code, prefs.translatorWifiOnly, new LanguagePacks.Listener() {
+                        @Override
+                        public void onDone(boolean ok) {
+                            if (!ok) Toast.makeText(SettingsActivity.this, prefs.translatorWifiOnly
+                                    ? "Не скачалось: подключитесь к Wi-Fi"
+                                    : "Не скачалось: проверьте интернет", Toast.LENGTH_SHORT).show();
+                            refresh[0].run();
+                        }
+                    });
+                    refresh[0].run();
+                }
+            });
+            addRow(packs, wrap, 16);
+        }
+        refresh[0] = new Runnable() {
+            @Override
+            public void run() {
+                LanguagePacks.list(new LanguagePacks.ListListener() {
+                    @Override
+                    public void onList(java.util.Set<String> downloaded) {
+                        have.clear();
+                        have.addAll(downloaded);
+                        for (java.util.Map.Entry<String, TextView> e : status.entrySet()) {
+                            String code = e.getKey();
+                            TextView st = e.getValue();
+                            boolean busy = LanguagePacks.DOWNLOADING.contains(code);
+                            bars.get(code).setRunning(busy);
+                            if (busy) {
+                                st.setText("Скачивается…");
+                                st.setTextColor(secondary());
+                            } else if (have.contains(code)) {
+                                st.setText("✓ На телефоне");
+                                st.setTextColor(secondary());
+                            } else {
+                                st.setText("Скачать ↓");
+                                st.setTextColor(accentInk());
+                            }
+                        }
+                    }
+                });
+            }
+        };
+        refresh[0].run();
+        footer(col, "Нажмите на язык, чтобы скачать его (около 30 МБ) — полоска показывает загрузку. "
+                + "Нажмите на скачанный язык, чтобы удалить его и освободить место. Английский нужен "
+                + "для перевода между любыми языками.");
+
+        LinearLayout g = group(col, null);
         switchRow(g, "Скачивать только по Wi-Fi", "trans_wifi", prefs.translatorWifiOnly);
         footer(col, "Удерживайте пробел и печатайте — перевод появляется сразу, «Вставить» или "
-                + "кнопка ввода вставляет его в поле. Нажмите на язык, чтобы выбрать другой, ⇄ меняет "
-                + "языки местами. Перевод выполняется прямо на телефоне (Google ML Kit): текст никуда "
-                + "не отправляется. Интернет нужен только один раз, чтобы скачать язык (~30 МБ).");
+                + "кнопка ввода вставляет его в поле. Перевод выполняется прямо на телефоне (Google "
+                + "ML Kit): текст никуда не отправляется. Интернет нужен только для скачивания языков.");
         return page("Переводчик", col, false);
+    }
+
+    /** Checkmark list of translator languages; picking one goes back. */
+    private View langPickPage(final boolean source) {
+        LinearLayout col = column();
+        LinearLayout g = group(col, source ? "Переводить с" : "Переводить на");
+        String current = source ? prefs.transSrc : prefs.transDst;
+        for (final String[] lang : TranslateEngine.LANGS) {
+            if (!source && "auto".equals(lang[0])) continue;
+            TextView check = checkRow(g, lang[1], lang[0].equals(current));
+            ((View) check.getParent()).setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    String key = source ? "trans_src" : "trans_dst";
+                    String other = source ? prefs.transDst : prefs.transSrc;
+                    prefs.setString(key, lang[0]);
+                    if (lang[0].equals(other)) {
+                        prefs.setString(source ? "trans_dst" : "trans_src",
+                                source ? ("en".equals(lang[0]) ? "ru" : "en") : "auto");
+                    }
+                    pop();
+                }
+            });
+        }
+        return page(source ? "С языка" : "На язык", col, false);
     }
 
     private void replaceTop(View page) {

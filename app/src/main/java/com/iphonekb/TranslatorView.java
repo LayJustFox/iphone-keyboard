@@ -43,6 +43,7 @@ final class TranslatorView extends View {
 
     private String src = "auto", dst = "en", detected;
     private String input = "", result = "", status;
+    private boolean busy;
     private boolean picking, pickingSource;
     private float pickScroll, pickMax;
 
@@ -98,12 +99,14 @@ final class TranslatorView extends View {
     void setResult(String r, String detectedSource) {
         result = r == null ? "" : r;
         status = null;
+        busy = false;
         detected = detectedSource;
         invalidate();
     }
 
-    void setStatus(String s) {
+    void setStatus(String s, boolean busy) {
         status = s;
+        this.busy = busy;
         invalidate();
     }
 
@@ -263,6 +266,23 @@ final class TranslatorView extends View {
         c.translate(dp(16), rt + dp(6));
         resultLayout.draw(c);
         c.restore();
+        if (status != null && busy) {
+            // Download in progress: a gliding bar (ML Kit does not report exact progress).
+            float by = rt + dp(6) + resultLayout.getHeight() + dp(10);
+            float bw = W - dp(32);
+            float bh = dp(4);
+            fill.setColor(theme.dark ? 0x33FFFFFF : 0x1F000000);
+            tmp.set(dp(16), by, dp(16) + bw, by + bh);
+            c.drawRoundRect(tmp, bh / 2, bh / 2, fill);
+            float t = (android.os.SystemClock.uptimeMillis() % 1400) / 1400f;
+            float e = t * t * (3 - 2 * t);
+            float seg = bw * 0.32f;
+            float x = dp(16) - seg + e * (bw + seg);
+            fill.setColor(theme.accentInk);
+            tmp.set(Math.max(dp(16), x), by, Math.min(dp(16) + bw, x + seg), by + bh);
+            if (tmp.width() > 0) c.drawRoundRect(tmp, bh / 2, bh / 2, fill);
+            postInvalidateOnAnimation();
+        }
     }
 
     private int blend(int c) {

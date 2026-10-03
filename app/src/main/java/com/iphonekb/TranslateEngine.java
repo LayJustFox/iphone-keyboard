@@ -23,7 +23,7 @@ final class TranslateEngine {
         /** @param req request number (stale results are ignored by the caller) */
         void onTranslated(int req, String detectedSource, String text);
 
-        void onStatus(int req, String status);
+        void onStatus(int req, String status, boolean busy);
     }
 
     /** Languages offered in the translator: code, name. "auto" = detect. */
@@ -89,7 +89,7 @@ final class TranslateEngine {
         }
         String s = TranslateLanguage.fromLanguageTag(src), d = TranslateLanguage.fromLanguageTag(dst);
         if (s == null || d == null) {
-            cb.onStatus(req, "Этот язык не поддерживается");
+            cb.onStatus(req, "Этот язык не поддерживается", false);
             return;
         }
         if (translator == null || !s.equals(curSrc) || !d.equals(curDst)) {
@@ -105,7 +105,7 @@ final class TranslateEngine {
         main.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (!done[0]) cb.onStatus(req, "Загрузка языков для перевода… (один раз, ~30 МБ)");
+                if (!done[0]) cb.onStatus(req, "Скачиваю языки для перевода… (один раз, ~30 МБ)", true);
             }
         }, 400);
         DownloadConditions.Builder cond = new DownloadConditions.Builder();
@@ -126,7 +126,7 @@ final class TranslateEngine {
                                     @Override
                                     public void onFailure(Exception e) {
                                         done[0] = true;
-                                        cb.onStatus(req, "Не удалось перевести");
+                                        cb.onStatus(req, "Не удалось перевести", false);
                                     }
                                 });
                     }
@@ -137,7 +137,7 @@ final class TranslateEngine {
                         done[0] = true;
                         cb.onStatus(req, wifiOnly
                                 ? "Подключитесь к Wi-Fi, чтобы один раз скачать язык"
-                                : "Нужен интернет, чтобы один раз скачать язык");
+                                : "Нужен интернет, чтобы один раз скачать язык", false);
                     }
                 });
     }

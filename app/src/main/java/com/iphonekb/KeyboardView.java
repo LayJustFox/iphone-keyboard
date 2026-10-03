@@ -123,6 +123,7 @@ final class KeyboardView extends View {
     private final Anim layoutT = new Anim(1);    // labels fading in after 123 / ABC
     private final Anim accentT = new Anim(0);    // blue return key
     private final Anim shiftT = new Anim(0);     // white shift key
+    private final Anim lockT = new Anim(0);      // Caps Lock bar under the arrow
     private final Anim stripT = new Anim(0);     // 1 = suggestions, 0 = toolbar
     private final Anim menuT = new Anim(0);      // language menu (hold 🌐)
 
@@ -266,6 +267,7 @@ final class KeyboardView extends View {
             shiftState = s;
             caseT.target = upper() ? 1 : 0;
             shiftT.target = s != SHIFT_OFF ? 1 : 0;
+            lockT.target = s == SHIFT_LOCK ? 1 : 0;
             kick();
         }
     }
@@ -348,14 +350,15 @@ final class KeyboardView extends View {
         }
         float base = prefs.animSpeed == Prefs.ANIM_FAST ? 0.6f : 1.35f;
         boolean moving = false;
-        moving |= ease(caseT, dt, 55 * base);
+        moving |= ease(caseT, dt, 95 * base);
         moving |= ease(labelsT, dt, 70 * base);
         moving |= ease(flashT, dt, (flashT.target > flashT.v ? 60 : 160) * base);
         moving |= ease(bubbleT, dt, 26 * base);
         moving |= ease(altsT, dt, 45 * base);
         moving |= ease(layoutT, dt, 55 * base);
         moving |= ease(accentT, dt, 70 * base);
-        moving |= ease(shiftT, dt, 45 * base);
+        moving |= ease(shiftT, dt, 80 * base);
+        moving |= ease(lockT, dt, 80 * base);
         moving |= ease(stripT, dt, 70 * base);
         moving |= ease(menuT, dt, 55 * base);
         if (layout != null) {
@@ -392,7 +395,7 @@ final class KeyboardView extends View {
     }
 
     private void snapAll() {
-        Anim[] all = {caseT, labelsT, flashT, bubbleT, altsT, layoutT, accentT, shiftT, stripT, menuT};
+        Anim[] all = {caseT, labelsT, flashT, bubbleT, altsT, layoutT, accentT, shiftT, lockT, stripT, menuT};
         for (Anim a : all) a.v = a.target;
         if (layout != null) for (Key[] row : layout.rows) for (Key k : row) k.press = k.pressTarget;
         globeKey.press = globeKey.pressTarget;
@@ -1322,17 +1325,28 @@ final class KeyboardView extends View {
                 text.setTypeface(Typeface.DEFAULT);
                 text.setTextSize(Math.min(m.letterSize, r.width() * 0.8f));
                 if (lettersMode && caseT.v > 0.001f && caseT.v < 0.999f) {
-                    text.setColor(alpha(fg, la * (1f - caseT.v)));
-                    drawCentered(c, k.label, cx, cy - dp(1) + rise());
-                    text.setColor(alpha(fg, la * caseT.v));
-                    drawCentered(c, k.upper, cx, cy - dp(1) + rise());
+                    // Case morph: the old letter shrinks and fades as the new one grows in.
+                    float u = smooth(caseT.v);
+                    float y = cy - dp(1) + rise();
+                    c.save();
+                    float sl = 1f - 0.22f * u;
+                    c.scale(sl, sl, cx, y);
+                    text.setColor(alpha(fg, la * (1f - u) * (1f - u)));
+                    drawCentered(c, k.label, cx, y + u * dp(2.5f));
+                    c.restore();
+                    c.save();
+                    float su = 0.78f + 0.22f * u;
+                    c.scale(su, su, cx, y);
+                    text.setColor(alpha(fg, la * u * (2f - u)));
+                    drawCentered(c, k.upper, cx, y - (1f - u) * dp(2.5f));
+                    c.restore();
                 } else {
                     text.setColor(col);
                     drawCentered(c, lettersMode && caseT.v >= 0.999f ? k.upper : k.label, cx, cy - dp(1) + rise());
                 }
                 break;
             case Key.SHIFT:
-                drawShift(c, cx, cy, col, shiftState);
+                drawShift(c, cx, cy, col, shiftT.v, lockT.v);
                 break;
             case Key.DELETE:
                 drawDelete(c, cx, cy, col);
@@ -1580,7 +1594,13 @@ final class KeyboardView extends View {
         }
     }
 
-    private void drawShift(Canvas c, float cx, float cy, int color, int state) {
+    /** Smoothstep easing for cross-fades. */
+    private static float smooth(float t) {
+        return t * t * (3f - 2f * t);
+    }
+
+    /** Shift arrow that fills in gradually; the Caps Lock bar fades in under it. */
+    private void drawShift(Canvas c, float cx, float cy, int color, float on, float lock) {
         float top = cy - dp(9.5f), mid = cy - dp(0.5f), bottom = cy + dp(5.5f);
         float head = dp(9.5f), stem = dp(4.3f);
         path.reset();
@@ -1592,17 +1612,19 @@ final class KeyboardView extends View {
         path.lineTo(cx - stem, mid);
         path.lineTo(cx - head, mid);
         path.close();
-        if (state == SHIFT_OFF) {
-            stroke.setColor(color);
-            stroke.setStrokeWidth(dp(1.6f));
-            c.drawPath(path, stroke);
-        } else {
-            fill.setColor(color);
+        stroke.setColor(color);
+        stroke.setStrokeWidth(dp(1.6f));
+        c.drawPath(path, stroke);
+        if (on > 0.003f) {
+            fill.setColor(alpha(color, smooth(on)));
             c.drawPath(path, fill);
-            if (state == SHIFT_LOCK) {
-                tmp.set(cx - stem, bottom + dp(2.5f), cx + stem, bottom + dp(4.5f));
-                c.drawRect(tmp, fill);
-            }
+        }
+        if (lock > 0.003f) {
+            float l = smooth(lock);
+            float hw = stem * (0.4f + 0.6f * l);
+            fill.setColor(alpha(color, l));
+            tmp.set(cx - hw, bottom + dp(2.5f), cx + hw, bottom + dp(4.5f));
+            c.drawRoundRect(tmp, dp(1), dp(1), fill);
         }
     }
 

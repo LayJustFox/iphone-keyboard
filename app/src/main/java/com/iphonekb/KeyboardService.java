@@ -1122,8 +1122,8 @@ public final class KeyboardService extends InputMethodService
             }
 
             @Override
-            public void onStatus(int r, String status) {
-                if (r == transReq && translating) tv.setStatus(status);
+            public void onStatus(int r, String status, boolean busy) {
+                if (r == transReq && translating) tv.setStatus(status, busy);
             }
         });
     }

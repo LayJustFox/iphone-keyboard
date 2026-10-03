@@ -80,6 +80,10 @@ final class KeyboardView extends View {
     private CharSequence quickClipShown;
 
     private float keysTop, globeTop;
+    // Navigation bar under the keyboard (the keyboard now draws behind it, like iOS).
+    private int navInset;
+    private float bottomArea;   // everything below the keys: globe strip and/or nav bar
+    private float globeZone;    // part of bottomArea where the 🌐 sits
     private final Key globeKey = new Key(Key.GLOBE, "");
 
     // ---- paints & reusable objects (nothing is allocated while drawing)
@@ -148,6 +152,16 @@ final class KeyboardView extends View {
         @Override
         public void run() {
             onLongPress();
+        }
+    };
+
+    private long bubbleShownAt;
+    private final Runnable hideBubble = new Runnable() {
+        @Override
+        public void run() {
+            bubbleT.target = 0;
+            if (!animOn()) bubbleT.v = 0;
+            kick();
         }
     };
 
@@ -315,7 +329,7 @@ final class KeyboardView extends View {
         moving |= ease(caseT, dt, 55 * base);
         moving |= ease(labelsT, dt, 70 * base);
         moving |= ease(flashT, dt, (flashT.target > flashT.v ? 60 : 160) * base);
-        moving |= ease(bubbleT, dt, (bubbleT.target > bubbleT.v ? 22 : 45) * base);
+        moving |= ease(bubbleT, dt, 26 * base);
         moving |= ease(altsT, dt, 45 * base);
         moving |= ease(layoutT, dt, 40 * base);
         moving |= ease(accentT, dt, 70 * base);
@@ -376,13 +390,43 @@ final class KeyboardView extends View {
         measureRows = prefs.numberRow ? 5 : 4;
         m = Metrics.compute(prefs, getResources(), measureRows);
         keysTop = m.keysTop();
+        float nav = navInset;
+        boolean gesture = nav > 0 && nav <= dp(32);
+        if (m.globeH > 0) {
+            if (gesture) {
+                // iPhone style: 🌐 sits beside the gesture bar instead of in its own extra strip.
+                bottomArea = Math.max(m.globeH, nav + dp(30));
+                globeZone = bottomArea - nav;
+            } else {
+                bottomArea = m.globeH + nav; // 3-button navigation: strip above the buttons
+                globeZone = m.globeH;
+            }
+        } else {
+            bottomArea = nav;
+            globeZone = 0;
+        }
+    }
+
+    /** Height of the system navigation bar drawn over the bottom of the keyboard. */
+    void setNavInset(int px) {
+        if (px != navInset) {
+            navInset = px;
+            computeMetrics();
+            requestLayout();
+            layoutKeys();
+            invalidate();
+        }
+    }
+
+    private float totalHeight() {
+        return keysTop + measureRows * m.keyH + (measureRows - 1) * m.vGap + m.bottomPad + bottomArea;
     }
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         computeMetrics();
         int w = MeasureSpec.getSize(widthMeasureSpec);
-        setMeasuredDimension(w, (int) Math.ceil(m.totalHeight(measureRows)));
+        setMeasuredDimension(w, (int) Math.ceil(totalHeight()));
     }
 
     @Override
@@ -411,7 +455,7 @@ final class KeyboardView extends View {
             else layoutRow(row, y, W, unit, kh);
 
             float top = r == 0 ? m.stripH : y - m.vGap / 2;
-            float bottom = last ? (m.globeH > 0 ? globeTop : getHeight()) : y + kh + m.vGap / 2;
+            float bottom = last ? (globeZone > 0 ? globeTop : getHeight()) : y + kh + m.vGap / 2;
             for (int i = 0; i < row.length; i++) {
                 Key k = row[i];
                 float left = i == 0 ? 0 : (row[i - 1].rect.right + k.rect.left) / 2;
@@ -421,8 +465,8 @@ final class KeyboardView extends View {
             y += kh + m.vGap;
         }
         float gw = Math.min(dp(64), W / 5);
-        globeKey.rect.set(dp(8), globeTop, dp(8) + gw - dp(16), globeTop + m.globeH);
-        globeKey.hit.set(0, globeTop, gw, getHeight());
+        globeKey.rect.set(dp(8), globeTop, dp(8) + gw - dp(16), globeTop + globeZone);
+        globeKey.hit.set(0, globeTop, gw, globeTop + globeZone);
         refreshLabels();
         refreshStrip();
     }
@@ -547,7 +591,7 @@ final class KeyboardView extends View {
 
     private Key findKey(float x, float y) {
         if (layout == null) return null;
-        if (m.globeH > 0 && y >= globeTop) return globeKey.hit.contains(x, y) ? globeKey : null;
+        if (globeZone > 0 && y >= globeTop) return globeKey.hit.contains(x, y) ? globeKey : null;
         for (Key[] row : layout.rows) {
             for (Key k : row) {
                 if (k.hit.contains(x, y)) return k;
@@ -687,13 +731,20 @@ final class KeyboardView extends View {
 
     private void showBubble(Key k) {
         if (!prefs.popups) return;
-        if (bubbleKey != k && bubbleT.v > 0.05f && bubbleKey != null) {
-            // Sliding to a neighbour: the bubble jumps over with a quick re-pop.
-            bubbleT.v = Math.min(bubbleT.v, 0.7f);
-        }
+        // Like iOS: the big letter appears at once, at full size, and never animates in.
+        handler.removeCallbacks(hideBubble);
         bubbleKey = k;
+        bubbleT.v = 1;
         bubbleT.target = 1;
-        if (!animOn()) bubbleT.v = 1;
+        bubbleShownAt = SystemClock.uptimeMillis();
+    }
+
+    /** Keeps the bubble readable for at least ~90 ms even on very quick taps. */
+    private void releaseBubble() {
+        handler.removeCallbacks(hideBubble);
+        long wait = 90 - (SystemClock.uptimeMillis() - bubbleShownAt);
+        if (wait <= 0) hideBubble.run();
+        else handler.postDelayed(hideBubble, wait);
     }
 
     private void move(float x, float y) {
@@ -821,7 +872,7 @@ final class KeyboardView extends View {
             labelsT.target = 1;
         }
         if (downKey != null) setPressed(downKey, false, 0, 0);
-        bubbleT.target = 0;
+        releaseBubble();
         altsShown = false;
         altsT.target = 0;
         downKey = null;
@@ -1244,10 +1295,7 @@ final class KeyboardView extends View {
         bubble.set(left, top, left + bw, bottom);
         buildBubble(bubble, kr);
 
-        // Pops up from the key: scales from its base and fades in.
-        float s = 0.62f + 0.38f * t;
         c.save();
-        c.scale(s, s, kr.centerX(), kr.bottom);
         drawBubbleShape(c, t);
         text.setTypeface(Typeface.DEFAULT);
         text.setTextSize(Math.min(m.bubbleTextSize, bubble.height() * 0.8f));
@@ -1284,10 +1332,10 @@ final class KeyboardView extends View {
     }
 
     private void drawGlobeStrip(Canvas c) {
-        if (m.globeH <= 0) return;
+        if (globeZone <= 0) return;
         float cx = globeKey.rect.centerX();
-        float cy = globeTop + m.globeH * 0.45f;
-        float r = Math.min(dp(10.5f), m.globeH * 0.27f);
+        float cy = globeTop + globeZone * 0.48f;
+        float r = Math.min(dp(10.5f), Math.max(dp(8), globeZone * 0.3f));
         float p = globeKey.press;
         if (p > 0.001f) {
             fill.setColor(alpha(theme.highlight, p));

@@ -22,6 +22,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
@@ -129,6 +130,20 @@ public final class KeyboardService extends InputMethodService
         root.addView(stack, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         searchPane.setVisibility(View.GONE);
+
+        if (Build.VERSION.SDK_INT >= 30) {
+            // The keyboard extends behind the navigation bar; keep the keys above it.
+            root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+                @Override
+                public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                    int nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+                    kv.setNavInset(nav);
+                    ev.setBottomInset(nav);
+                    cv.setBottomInset(nav);
+                    return insets;
+                }
+            });
+        }
 
         applyTheme();
         refreshLayout();
@@ -287,7 +302,21 @@ public final class KeyboardService extends InputMethodService
         if (searchPane != null) searchPane.setTheme(theme);
 
         if (w == null) return;
-        w.setNavigationBarColor(translucent ? Color.TRANSPARENT : theme.solidBg());
+        if (Build.VERSION.SDK_INT >= 30) {
+            // Draw under the navigation bar like iOS draws under the home indicator, instead of
+            // leaving an empty band between the keys and the bar.
+            w.setDecorFitsSystemWindows(false);
+            WindowManager.LayoutParams lp = w.getAttributes();
+            int types = lp.getFitInsetsTypes() & ~WindowInsets.Type.navigationBars();
+            if (types != lp.getFitInsetsTypes()) {
+                lp.setFitInsetsTypes(types);
+                w.setAttributes(lp);
+            }
+            w.setNavigationBarColor(Color.TRANSPARENT);
+            w.setNavigationBarContrastEnforced(false);
+        } else {
+            w.setNavigationBarColor(translucent ? Color.TRANSPARENT : theme.solidBg());
+        }
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController c = w.getInsetsController();
             if (c != null) {

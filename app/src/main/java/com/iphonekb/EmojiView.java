@@ -121,6 +121,17 @@ final class EmojiView extends View {
         c.drawRect(0, 0, getWidth(), Math.max(1f, dp(0.6f)), fill);
     }
 
+    private int bottomInset;
+
+    /** Space taken by the navigation bar under this panel (content stays above it). */
+    void setBottomInset(int px) {
+        if (bottomInset != px) {
+            bottomInset = px;
+            requestLayout();
+            invalidate();
+        }
+    }
+
     void setAbcLabel(String s) {
         abcLabel = s;
         invalidate();
@@ -183,8 +194,8 @@ final class EmojiView extends View {
     }
 
     private void relayout() {
-        int W = getWidth(), H = getHeight();
-        if (W == 0 || H == 0) return;
+        int W = getWidth(), H = getHeight() - bottomInset;
+        if (W == 0 || H <= 0) return;
         titleH = dp(30);
         barH = Math.min(dp(44), H * 0.17f);
         gridTop = titleH;
@@ -264,7 +275,7 @@ final class EmojiView extends View {
     }
 
     private void drawBar(Canvas c) {
-        int W = getWidth(), H = getHeight();
+        int W = getWidth(), H = getHeight() - bottomInset;
         float top = H - barH;
         float cy = top + barH / 2;
 
@@ -361,7 +372,7 @@ final class EmojiView extends View {
 
     private int hitBar(float x, float y) {
         int W = getWidth();
-        if (y < getHeight() - barH) return BAR_NONE;
+        if (y < getHeight() - bottomInset - barH || y > getHeight() - bottomInset) return BAR_NONE;
         if (x < sideZone) return BAR_ABC;
         if (x > W - sideZone) return BAR_DELETE;
         if (icons.length == 0) return BAR_NONE;

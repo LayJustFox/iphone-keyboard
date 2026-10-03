@@ -138,6 +138,17 @@ final class ClipboardView extends View {
         invalidate();
     }
 
+    private int bottomInset;
+
+    /** Space taken by the navigation bar under this panel (content stays above it). */
+    void setBottomInset(int px) {
+        if (bottomInset != px) {
+            bottomInset = px;
+            requestLayout();
+            invalidate();
+        }
+    }
+
     void setAbcLabel(String s) {
         abcLabel = s;
         invalidate();
@@ -214,7 +225,7 @@ final class ClipboardView extends View {
         int n = items().size();
         int rows = (n + cols - 1) / cols;
         float content = rows * cardH + Math.max(0, rows - 1) * gap + 2 * pad;
-        maxScroll = Math.max(0, content - (getHeight() - headerH));
+        maxScroll = Math.max(0, content - (getHeight() - bottomInset - headerH));
         scroll = Math.max(0, Math.min(scroll, maxScroll));
         int w = (int) (cardW() - 2 * dp(12));
         if (w != layoutWidth) {
@@ -267,7 +278,7 @@ final class ClipboardView extends View {
         relayout();
         c.drawColor(theme.solidBg());
         List<ClipStore.Clip> l = items();
-        int W = getWidth(), H = getHeight();
+        int W = getWidth(), H = getHeight() - bottomInset;
         float cw = cardW();
 
         c.save();

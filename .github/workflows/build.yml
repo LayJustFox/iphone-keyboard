@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -20,7 +20,16 @@ jobs:
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          set -o pipefail
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+
+      # Shows compile errors as annotations on the run page (readable without opening the log).
+      - name: Report errors
+        if: failure()
+        run: |
+          grep -E "error:|What went wrong|Execution failed|Could not|^e: |warning: \[" build.log | head -40 | while IFS= read -r line; do
+            echo "::error::${line//%/%25}"
+          done
 
       - uses: actions/upload-artifact@v4
         with:

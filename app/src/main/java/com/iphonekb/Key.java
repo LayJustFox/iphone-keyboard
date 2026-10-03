@@ -1,7 +1,5 @@
 package com.iphonekb;
 
-import android.graphics.RectF;
-
 /** One key. Position (rect) and touch area (hit) are filled in by KeyboardView. */
 final class Key {
     static final int CHAR = 0, SHIFT = 1, DELETE = 2, MODE = 3, MORE = 4,
@@ -13,8 +11,16 @@ final class Key {
     final String[] alts;
     final float width;
 
-    final RectF rect = new RectF();
-    final RectF hit = new RectF();
+    /** Label in capitals for the current language (set by KeyboardView). */
+    String upper;
+
+    final android.graphics.RectF rect = new android.graphics.RectF();
+    final android.graphics.RectF hit = new android.graphics.RectF();
+
+    // Press animation: 0 = idle, 1 = fully pressed. Eased every frame toward pressTarget.
+    float press, pressTarget;
+    // Where the finger touched (for the "liquid" glow).
+    float touchX, touchY;
 
     Key(int type, String label, String output, String[] alts, float width) {
         this.type = type;
@@ -22,6 +28,7 @@ final class Key {
         this.output = output;
         this.alts = alts;
         this.width = width;
+        this.upper = label;
     }
 
     Key(int type, String label) {
@@ -30,5 +37,9 @@ final class Key {
 
     static Key ch(String label, String output, String[] alts, float width) {
         return new Key(CHAR, label, output, alts, width);
+    }
+
+    boolean isSpecial() {
+        return type != CHAR && type != SPACE;
     }
 }

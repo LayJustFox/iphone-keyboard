@@ -1,41 +1,58 @@
 package com.iphonekb;
 
 import android.app.Dialog;
+import android.content.ClipData;
+import android.content.ClipDescription;
+import android.content.ClipboardManager;
+import android.content.Intent;
 import android.content.res.Configuration;
+import android.graphics.Color;
+import android.graphics.PixelFormat;
+import android.graphics.drawable.ColorDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.media.AudioManager;
 import android.os.Build;
+import android.os.PersistableBundle;
 import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
+import android.util.TypedValue;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 
 import java.io.File;
 import java.util.List;
 import java.util.Locale;
 
 public final class KeyboardService extends InputMethodService
-        implements KeyboardView.Listener, EmojiView.Listener {
+        implements KeyboardView.Listener, EmojiView.Listener, ClipboardView.Listener {
 
     private static final int HIRA = 0, KATA = 1, LATIN = 2;
+    private static final long QUICK_PASTE_MS = 3 * 60 * 1000;
 
     private Prefs prefs;
     private WordStore words;
-    private int dictGeneration;
+    private ClipStore clips;
+    private int dictGeneration, clipGeneration;
     private KeyboardView kv;
     private EmojiView ev;
+    private ClipboardView cv;          // full clipboard panel (covers the keys)
+    private ClipboardView searchPane;  // results above the keys while searching
     private Theme theme;
     private Vibrator vibrator;
     private AudioManager audio;
+    private ClipboardManager clipboardManager;
+    private boolean translucent;
 
     private String lang = "ru";
     private int mode = Layouts.LETTERS;
@@ -54,6 +71,19 @@ public final class KeyboardService extends InputMethodService
 
     private final String[] suggestionWords = new String[3];
 
+    // clipboard search
+    private boolean searching;
+    private final StringBuilder searchQuery = new StringBuilder();
+    private ClipStore.Clip quickPasteDone;
+
+    private final ClipboardManager.OnPrimaryClipChangedListener clipListener =
+            new ClipboardManager.OnPrimaryClipChangedListener() {
+                @Override
+                public void onPrimaryClipChanged() {
+                    captureClipboard();
+                }
+            };
+
     // ---------------------------------------------------------------- lifecycle
 
     @Override
@@ -61,22 +91,45 @@ public final class KeyboardService extends InputMethodService
         super.onCreate();
         prefs = new Prefs(this);
         words = new WordStore(new File(getFilesDir(), "words.tsv"));
+        clips = new ClipStore(new File(getFilesDir(), "clipboard.bin"));
+        clips.setMax(prefs.clipMax);
         dictGeneration = prefs.dictGeneration;
+        clipGeneration = prefs.clipGeneration;
         vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         audio = (AudioManager) getSystemService(AUDIO_SERVICE);
+        clipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboardManager != null) clipboardManager.addPrimaryClipChangedListener(clipListener);
         lang = prefs.currentLang;
     }
 
     @Override
     public View onCreateInputView() {
-        kv = new KeyboardView(this, this);
+        kv = new KeyboardView(this, this, prefs);
         ev = new EmojiView(this, this);
-        FrameLayout root = new FrameLayout(this);
-        root.addView(kv, new FrameLayout.LayoutParams(
+        cv = new ClipboardView(this, this, false);
+        searchPane = new ClipboardView(this, this, true);
+        cv.setStore(clips);
+        searchPane.setStore(clips);
+
+        FrameLayout stack = new FrameLayout(this);
+        stack.addView(kv, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(ev, new FrameLayout.LayoutParams(
+        stack.addView(ev, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        stack.addView(cv, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         ev.setVisibility(View.GONE);
+        cv.setVisibility(View.GONE);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int paneH = Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 210,
+                getResources().getDisplayMetrics()));
+        root.addView(searchPane, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, paneH));
+        root.addView(stack, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        searchPane.setVisibility(View.GONE);
+
         applyTheme();
         refreshLayout();
         return root;
@@ -95,7 +148,13 @@ public final class KeyboardService extends InputMethodService
             dictGeneration = prefs.dictGeneration;
             words.clear();
         }
+        if (prefs.clipGeneration != clipGeneration) {
+            clipGeneration = prefs.clipGeneration;
+            clips.clearUnpinned();
+        }
+        clips.setMax(prefs.clipMax);
         if (!prefs.hasLang(lang)) lang = prefs.currentLang;
+        if (kv != null) kv.applyPrefs(prefs);
         applyTheme();
 
         int cls = info.inputType & InputType.TYPE_MASK_CLASS;
@@ -120,9 +179,15 @@ public final class KeyboardService extends InputMethodService
         lastWasSpace = false;
         selStart = info.initialSelStart;
         selEnd = info.initialSelEnd;
+        searching = false;
+        searchQuery.setLength(0);
 
         if (ev != null) ev.hideNow();
+        if (cv != null) cv.hideNow();
+        if (searchPane != null) searchPane.setVisibility(View.GONE);
+        if (cv != null) cv.setEnabledHistory(prefs.clipboard);
         if (kv != null) kv.cancelTouch();
+        captureClipboard();
         refreshLayout();
         updateAutoShift();
         updateSuggestions();
@@ -137,14 +202,24 @@ public final class KeyboardService extends InputMethodService
             romaji.setLength(0);
             jaMode = HIRA;
         }
+        searching = false;
         if (kv != null) kv.cancelTouch();
         words.save();
     }
 
     @Override
     public void onDestroy() {
+        if (clipboardManager != null) clipboardManager.removePrimaryClipChangedListener(clipListener);
         words.save();
+        clips.flush();
         super.onDestroy();
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (kv != null) kv.applyPrefs(prefs);
+        applyTheme();
     }
 
     @Override
@@ -178,30 +253,51 @@ public final class KeyboardService extends InputMethodService
 
     // ---------------------------------------------------------------- look
 
-    private void applyTheme() {
-        boolean dark;
-        if (Prefs.THEME_DARK.equals(prefs.theme)) dark = true;
-        else if (Prefs.THEME_LIGHT.equals(prefs.theme)) dark = false;
-        else dark = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+    private boolean systemDark() {
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
                 == Configuration.UI_MODE_NIGHT_YES;
-        theme = dark ? Theme.dark() : Theme.light();
-        if (kv != null) kv.setTheme(theme);
-        if (ev != null) ev.setTheme(theme);
+    }
 
+    private void applyTheme() {
         Dialog d = getWindow();
         Window w = d == null ? null : d.getWindow();
+
+        // Real blur of the app behind the keyboard (Android 12+, if the phone supports it).
+        translucent = false;
+        if (w != null && Build.VERSION.SDK_INT >= 31) {
+            WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+            boolean can = wm != null && wm.isCrossWindowBlurEnabled();
+            boolean want = prefs.blur && can && Prefs.STYLE_GLASS.equals(prefs.style);
+            if (want) {
+                w.setFormat(PixelFormat.TRANSLUCENT);
+                w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+                w.setBackgroundBlurRadius(Math.round(TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP, 28, getResources().getDisplayMetrics())));
+                translucent = true;
+            } else {
+                w.setBackgroundBlurRadius(0);
+            }
+        }
+
+        boolean sysDark = systemDark();
+        theme = Theme.from(prefs, sysDark, translucent);
+        if (kv != null) kv.setTheme(theme);
+        if (ev != null) ev.setTheme(theme);
+        if (cv != null) cv.setTheme(theme);
+        if (searchPane != null) searchPane.setTheme(theme);
+
         if (w == null) return;
-        w.setNavigationBarColor(theme.bg);
+        w.setNavigationBarColor(translucent ? Color.TRANSPARENT : theme.solidBg());
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController c = w.getInsetsController();
             if (c != null) {
-                c.setSystemBarsAppearance(dark ? 0 : WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                c.setSystemBarsAppearance(theme.dark ? 0 : WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
                         WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
             }
         } else {
             View decor = w.getDecorView();
             int f = decor.getSystemUiVisibility();
-            f = dark ? (f & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR) : (f | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            f = theme.dark ? (f & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR) : (f | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
             decor.setSystemUiVisibility(f);
         }
     }
@@ -217,13 +313,18 @@ public final class KeyboardService extends InputMethodService
     private void refreshLayout() {
         if (kv == null) return;
         kv.setLocale(locale());
-        kv.setLayout(Layouts.get(lang, mode), mode == Layouts.LETTERS);
+        kv.setLayout(Layouts.get(lang, mode, prefs.numberRow, !prefs.globeRow), mode == Layouts.LETTERS);
         kv.setShift(shift);
         updateKeyLabels();
     }
 
     private void updateKeyLabels() {
         if (kv == null) return;
+        if (searching) {
+            kv.setSpaceLabel(Layouts.space(lang));
+            kv.setReturn(Layouts.returnLabel(lang, Layouts.SEARCH), true);
+            return;
+        }
         if (romaji.length() > 0) {
             String next = jaMode == HIRA ? "カナ" : jaMode == KATA ? "ABC" : "かな";
             kv.setSpaceLabel(next);
@@ -251,17 +352,17 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onFeedback(int keyType) {
-        if (prefs.vibrate && vibrator != null && vibrator.hasVibrator()) {
+        int h = prefs.haptic;
+        if (h > 0 && vibrator != null && vibrator.hasVibrator()) {
             try {
-                if (vibrator.hasAmplitudeControl()) {
-                    vibrator.vibrate(VibrationEffect.createOneShot(10, 70));
-                } else {
-                    vibrator.vibrate(VibrationEffect.createOneShot(12, VibrationEffect.DEFAULT_AMPLITUDE));
-                }
+                long ms = h == 1 ? 8 : h == 2 ? 12 : 18;
+                int amp = h == 1 ? 60 : h == 2 ? 130 : 230;
+                vibrator.vibrate(VibrationEffect.createOneShot(ms,
+                        vibrator.hasAmplitudeControl() ? amp : VibrationEffect.DEFAULT_AMPLITUDE));
             } catch (RuntimeException ignored) {
             }
         }
-        if (prefs.sound && audio != null) {
+        if (prefs.sound && prefs.soundVolume > 0 && audio != null) {
             int fx;
             switch (keyType) {
                 case Key.DELETE: fx = AudioManager.FX_KEYPRESS_DELETE; break;
@@ -269,7 +370,7 @@ public final class KeyboardService extends InputMethodService
                 case Key.RETURN: fx = AudioManager.FX_KEYPRESS_RETURN; break;
                 default: fx = AudioManager.FX_KEYPRESS_STANDARD; break;
             }
-            audio.playSoundEffect(fx, -1f);
+            audio.playSoundEffect(fx, prefs.soundVolume / 100f);
         }
     }
 
@@ -284,6 +385,12 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onText(String s) {
+        if (searching) {
+            searchQuery.append(s);
+            searchPane.setQuery(searchQuery.toString());
+            afterChar();
+            return;
+        }
         InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         if (composesRomaji(s)) {
@@ -336,6 +443,10 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onSpace() {
+        if (searching) {
+            onText(" ");
+            return;
+        }
         InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         if (romaji.length() > 0) {
@@ -364,6 +475,10 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onReturn() {
+        if (searching) {
+            onClipSearchDone();
+            return;
+        }
         InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         if (romaji.length() > 0) {
@@ -379,6 +494,13 @@ public final class KeyboardService extends InputMethodService
 
     @Override
     public void onDelete(boolean word) {
+        if (searching) {
+            if (searchQuery.length() > 0) {
+                searchQuery.setLength(searchQuery.length() - 1);
+                searchPane.setQuery(searchQuery.toString());
+            }
+            return;
+        }
         InputConnection ic = getCurrentInputConnection();
         if (ic == null) return;
         lastWasSpace = false;
@@ -444,7 +566,7 @@ public final class KeyboardService extends InputMethodService
     private void updateAutoShift() {
         if (kv == null || shift == KeyboardView.SHIFT_LOCK) return;
         boolean want = false;
-        if (prefs.autoCap && mode == Layouts.LETTERS && !isJa() && romaji.length() == 0) {
+        if (prefs.autoCap && mode == Layouts.LETTERS && !isJa() && romaji.length() == 0 && !searching) {
             InputConnection ic = getCurrentInputConnection();
             EditorInfo ei = getCurrentInputEditorInfo();
             if (ic != null && ei != null && ei.inputType != 0) {
@@ -484,7 +606,7 @@ public final class KeyboardService extends InputMethodService
     @Override
     public void onCursor(int dx, int dy) {
         InputConnection ic = getCurrentInputConnection();
-        if (ic == null) return;
+        if (ic == null || searching) return;
         if (romaji.length() > 0) commitComposition(ic);
         int steps = Math.min(Math.abs(dx), 20);
         for (int i = 0; i < steps; i++) {
@@ -569,6 +691,108 @@ public final class KeyboardService extends InputMethodService
         updateAutoShift();
     }
 
+    @Override
+    public void onSettings() {
+        Intent i = new Intent(this, SettingsActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(i);
+    }
+
+    // ---------------------------------------------------------------- clipboard
+
+    private void captureClipboard() {
+        if (!prefs.clipboard || clipboardManager == null) return;
+        ClipData cd;
+        try {
+            cd = clipboardManager.getPrimaryClip();
+        } catch (RuntimeException e) {
+            return; // not allowed right now (keyboard not in focus)
+        }
+        if (cd == null || cd.getItemCount() == 0) return;
+        ClipDescription desc = cd.getDescription();
+        if (desc != null) {
+            PersistableBundle extras = desc.getExtras();
+            // Apps mark passwords and codes as sensitive: never keep those.
+            if (extras != null && extras.getBoolean("android.content.extra.IS_SENSITIVE", false)) return;
+        }
+        CharSequence t = cd.getItemAt(0).getText();
+        if (t == null) return;
+        if (clips.add(t.toString())) {
+            quickPasteDone = null;
+            updateQuickClip();
+            if (cv != null) cv.invalidate();
+        }
+    }
+
+    private void updateQuickClip() {
+        if (kv == null) return;
+        ClipStore.Clip c = clips.latest();
+        boolean fresh = c != null && c != quickPasteDone && prefs.clipboard
+                && System.currentTimeMillis() - c.time < QUICK_PASTE_MS;
+        kv.setQuickClip(fresh ? c.text : null);
+    }
+
+    @Override
+    public void onQuickPaste() {
+        ClipStore.Clip c = clips.latest();
+        if (c == null) return;
+        InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        if (romaji.length() > 0) commitComposition(ic);
+        ic.commitText(c.text, 1);
+        quickPasteDone = c;
+        updateQuickClip();
+    }
+
+    @Override
+    public void onClipboard() {
+        InputConnection ic = getCurrentInputConnection();
+        if (ic != null && romaji.length() > 0) commitComposition(ic);
+        captureClipboard();
+        if (cv == null) return;
+        cv.setAbcLabel(Layouts.abc(lang));
+        cv.setEnabledHistory(prefs.clipboard);
+        cv.show();
+    }
+
+    @Override
+    public void onClipPaste(ClipStore.Clip clip) {
+        InputConnection ic = getCurrentInputConnection();
+        if (ic == null) return;
+        ic.commitText(clip.text, 1);
+        lastWasSpace = false;
+        if (searching) onClipSearchDone();
+    }
+
+    @Override
+    public void onClipClose() {
+        if (cv != null) cv.hide();
+        updateAutoShift();
+    }
+
+    @Override
+    public void onClipSearch() {
+        searching = true;
+        searchQuery.setLength(0);
+        searchPane.setQuery("");
+        searchPane.setVisibility(View.VISIBLE);
+        cv.hideNow();
+        mode = Layouts.LETTERS;
+        refreshLayout();
+        updateAutoShift();
+        updateSuggestions();
+    }
+
+    @Override
+    public void onClipSearchDone() {
+        searching = false;
+        searchPane.setVisibility(View.GONE);
+        updateKeyLabels();
+        updateSuggestions();
+        updateAutoShift();
+        cv.show();
+    }
+
     // ---------------------------------------------------------------- suggestions
 
     /** Letters right before the cursor. */
@@ -597,6 +821,10 @@ public final class KeyboardService extends InputMethodService
         String[] shown = new String[3];
         for (int i = 0; i < 3; i++) suggestionWords[i] = null;
         InputConnection ic = getCurrentInputConnection();
+        if (searching) {
+            kv.setSuggestions(shown);
+            return;
+        }
         if (romaji.length() > 0) {
             String h = Romaji.toHiragana(romaji, true);
             suggestionWords[0] = h;
@@ -616,6 +844,7 @@ public final class KeyboardService extends InputMethodService
         for (int i = 0; i < 3; i++) shown[i] = suggestionWords[i];
         if (romaji.length() == 0 && shown[0] != null) shown[0] = "«" + shown[0] + "»";
         kv.setSuggestions(shown);
+        updateQuickClip();
     }
 
     private String matchCase(String w, String prefix) {

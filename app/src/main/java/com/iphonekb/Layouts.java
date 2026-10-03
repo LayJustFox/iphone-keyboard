@@ -72,12 +72,16 @@ final class Layouts {
 
     // ---------------------------------------------------------------- pages
 
-    static Layout get(String lang, int mode) {
-        if (mode == LETTERS) return letters(lang);
-        return symbols(lang, mode == SYM2);
+    /**
+     * @param numberRow  extra row of digits above the letters
+     * @param globeInRow put 🌐 in the bottom row (used when the iPhone-style globe strip is hidden)
+     */
+    static Layout get(String lang, int mode, boolean numberRow, boolean globeInRow) {
+        if (mode == LETTERS) return letters(lang, numberRow, globeInRow);
+        return symbols(lang, mode == SYM2, globeInRow);
     }
 
-    private static Layout letters(String lang) {
+    private static Layout letters(String lang, boolean numberRow, boolean globeInRow) {
         String r1, r2, r3;
         int cols;
         Map<String, String> alts;
@@ -100,15 +104,22 @@ final class Layouts {
         row3[0] = new Key(Key.SHIFT, "");
         System.arraycopy(mid, 0, row3, 1, mid.length);
         row3[row3.length - 1] = new Key(Key.DELETE, "");
-        return new Layout(cols, new Key[][]{
+        Key[][] rows = {
                 chars(r1, alts, 1f),
                 chars(r2, alts, 1f),
                 row3,
-                bottom("123"),
-        });
+                bottom("123", globeInRow),
+        };
+        if (numberRow) {
+            Key[][] withNumbers = new Key[rows.length + 1][];
+            withNumbers[0] = chars("1234567890", SYM_ALTS, 1f);
+            System.arraycopy(rows, 0, withNumbers, 1, rows.length);
+            rows = withNumbers;
+        }
+        return new Layout(cols, rows);
     }
 
-    private static Layout symbols(String lang, boolean second) {
+    private static Layout symbols(String lang, boolean second, boolean globeInRow) {
         String cur;
         String others;
         switch (lang) {
@@ -130,11 +141,20 @@ final class Layouts {
                 chars(r1, SYM_ALTS, 1f),
                 chars(r2, SYM_ALTS, 1f),
                 row3,
-                bottom(abc(lang)),
+                bottom(abc(lang), globeInRow),
         });
     }
 
-    private static Key[] bottom(String modeLabel) {
+    private static Key[] bottom(String modeLabel, boolean globeInRow) {
+        if (globeInRow) {
+            return new Key[]{
+                    new Key(Key.MODE, modeLabel),
+                    new Key(Key.GLOBE, ""),
+                    new Key(Key.EMOJI, ""),
+                    new Key(Key.SPACE, ""),
+                    new Key(Key.RETURN, ""),
+            };
+        }
         return new Key[]{
                 new Key(Key.MODE, modeLabel),
                 new Key(Key.EMOJI, ""),

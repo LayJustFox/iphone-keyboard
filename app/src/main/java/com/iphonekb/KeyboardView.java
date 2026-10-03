@@ -1,14 +1,17 @@
 package com.iphonekb;
 
-import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.res.Configuration;
 import android.graphics.Canvas;
+import android.graphics.LinearGradient;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RadialGradient;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -16,13 +19,15 @@ import android.text.TextPaint;
 import android.text.TextUtils;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.animation.DecelerateInterpolator;
 
 import java.util.Locale;
 
 /**
- * Draws the whole keyboard (suggestion bar, keys, globe strip) and handles touches.
- * Everything is drawn on one canvas so the letter bubble can rise over the suggestion bar.
+ * Draws the whole keyboard (suggestion bar / toolbar, keys, globe strip) and handles touches.
+ *
+ * Animations: every animated value eases toward a target once per display frame
+ * (exponential smoothing on real frame time), so motion stays smooth at 60, 90 or 120 Hz
+ * and never "jumps" when a new target arrives mid-animation.
  */
 @SuppressLint("ViewConstructor")
 final class KeyboardView extends View {
@@ -42,52 +47,90 @@ final class KeyboardView extends View {
         void onGlobeLong();
         void onCursor(int dx, int dy);
         void onSuggestion(int index);
+        void onClipboard();
+        void onSettings();
+        void onQuickPaste();
     }
 
     static final int SHIFT_OFF = 0, SHIFT_ON = 1, SHIFT_LOCK = 2;
 
     private static final int NONE = 0, KEY = 1, STRIP = 2;
+    private static final int TOOL_CLIP = 10, TOOL_SETTINGS = 11, TOOL_PASTE = 12;
 
     private final Listener listener;
     private final float density;
+    private Prefs prefs;
+    private Metrics m;
     private Theme theme = Theme.light();
     private Layout layout;
+    private int measureRows = 4;
     private Locale locale = Locale.US;
     private int shiftState = SHIFT_OFF;
     private boolean lettersMode = true;
 
     private String spaceLabel = "space";
     private String returnLabel = "return";
-    private boolean returnAccent;
+    private CharSequence spaceShown = "", returnShown = "";
     private String flashLabel;
-    private float flashAlpha;
-    private ValueAnimator flashAnim;
+    private CharSequence flashShown = "";
 
     private final String[] suggestions = new String[3];
+    private final CharSequence[] suggestionsShown = new CharSequence[3];
+    private String quickClip;
+    private CharSequence quickClipShown;
 
-    // metrics (px)
-    private float stripH, topPad, keyH, vGap, hGap, side, bottomPad, globeH, radius;
     private float keysTop, globeTop;
-
     private final Key globeKey = new Key(Key.GLOBE, "");
 
+    // ---- paints & reusable objects (nothing is allocated while drawing)
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint shade = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final TextPaint text = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
+    private final Path clip = new Path();
     private final RectF tmp = new RectF();
     private final RectF bubble = new RectF();
+    private final Matrix matrix = new Matrix();
+    private LinearGradient keyShader, specShader, rimShader, bubbleShader, panelShader;
+    private RadialGradient glowShader;
 
-    // touch state
+    // ---- animation state
+    private static final class Anim {
+        float v, target;
+
+        Anim(float v) {
+            this.v = v;
+            this.target = v;
+        }
+    }
+
+    private final Anim caseT = new Anim(0);      // 1 = capitals shown
+    private final Anim labelsT = new Anim(1);    // 0 while the space bar is a trackpad
+    private final Anim flashT = new Anim(0);     // language name on the space bar
+    private final Anim bubbleT = new Anim(0);    // letter bubble
+    private final Anim altsT = new Anim(0);      // long-press variants panel
+    private final Anim layoutT = new Anim(1);    // labels fading in after 123 / ABC
+    private final Anim accentT = new Anim(0);    // blue return key
+    private final Anim shiftT = new Anim(0);     // white shift key
+    private final Anim stripT = new Anim(0);     // 1 = suggestions, 0 = toolbar
+    private long lastFrame;
+    private boolean frameActive;
+
+    // ---- touch state
     private int pointerId = -1;
     private int touchKind = NONE;
     private Key downKey;
+    private Key bubbleKey;
     private float downX;
     private float lastX, lastY;
-    private int pressedSuggestion = -1;
+    private int pressedStrip = -1;
     private boolean modeSlide, movedOff, longFired;
 
     private boolean altsShown;
+    private Key altsKey;
     private String[] alts;
     private final RectF altsRect = new RectF();
     private float altCellW, altPad;
@@ -95,8 +138,6 @@ final class KeyboardView extends View {
 
     private boolean trackpad;
     private float accX, accY;
-    private float labelAlpha = 1f;
-    private ValueAnimator labelAnim;
 
     private int deleteCount;
     private long deleteStart;
@@ -107,6 +148,14 @@ final class KeyboardView extends View {
         @Override
         public void run() {
             onLongPress();
+        }
+    };
+
+    private final Runnable flashOut = new Runnable() {
+        @Override
+        public void run() {
+            flashT.target = 0;
+            kick();
         }
     };
 
@@ -125,15 +174,20 @@ final class KeyboardView extends View {
         }
     };
 
-    KeyboardView(Context context, Listener listener) {
+    KeyboardView(Context context, Listener listener, Prefs prefs) {
         super(context);
         this.listener = listener;
+        this.prefs = prefs;
         this.density = context.getResources().getDisplayMetrics().density;
         stroke.setStyle(Paint.Style.STROKE);
         stroke.setStrokeJoin(Paint.Join.ROUND);
         stroke.setStrokeCap(Paint.Cap.ROUND);
+        rim.setStyle(Paint.Style.STROKE);
         text.setTextAlign(Paint.Align.CENTER);
+        glowShader = new RadialGradient(0, 0, 1, 0x73FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP);
+        glowPaint.setShader(glowShader);
         computeMetrics();
+        buildShaders();
     }
 
     private float dp(float v) {
@@ -142,133 +196,238 @@ final class KeyboardView extends View {
 
     // ---------------------------------------------------------------- state from the service
 
-    void setTheme(Theme t) {
-        theme = t;
-        invalidate();
-    }
-
-    void setLayout(Layout l, boolean letters) {
-        layout = l;
-        lettersMode = letters;
+    /** Re-reads every size / look setting (live preview in the settings uses this too). */
+    void applyPrefs(Prefs p) {
+        prefs = p;
+        computeMetrics();
+        requestLayout();
         layoutKeys();
         invalidate();
     }
 
+    void setTheme(Theme t) {
+        theme = t;
+        buildShaders();
+        invalidate();
+    }
+
+    void setLayout(Layout l, boolean letters) {
+        boolean changed = layout != null && l != layout;
+        layout = l;
+        lettersMode = letters;
+        for (Key[] row : l.rows) for (Key k : row) k.upper = k.label.toUpperCase(locale);
+        layoutKeys();
+        if (changed && animOn()) {
+            layoutT.v = 0.25f;
+            layoutT.target = 1;
+        }
+        caseT.target = upper() ? 1 : 0;
+        caseT.v = caseT.target;
+        kick();
+    }
+
     void setLocale(Locale l) {
         locale = l;
+        if (layout != null) for (Key[] row : layout.rows) for (Key k : row) k.upper = k.label.toUpperCase(l);
         invalidate();
     }
 
     void setShift(int s) {
         if (shiftState != s) {
             shiftState = s;
-            invalidate();
+            caseT.target = upper() ? 1 : 0;
+            shiftT.target = s != SHIFT_OFF ? 1 : 0;
+            kick();
         }
     }
 
     void setSpaceLabel(String s) {
         if (!s.equals(spaceLabel)) {
             spaceLabel = s;
+            refreshLabels();
             invalidate();
         }
     }
 
     void setReturn(String label, boolean accent) {
         returnLabel = label;
-        returnAccent = accent;
-        invalidate();
+        accentT.target = accent ? 1 : 0;
+        if (layout == null || !animOn()) accentT.v = accentT.target;
+        refreshLabels();
+        kick();
     }
 
     void setSuggestions(String[] s) {
-        for (int i = 0; i < 3; i++) suggestions[i] = s != null && i < s.length ? s[i] : null;
+        boolean any = false;
+        for (int i = 0; i < 3; i++) {
+            suggestions[i] = s != null && i < s.length ? s[i] : null;
+            any |= suggestions[i] != null;
+        }
+        stripT.target = any ? 1 : 0;
+        refreshStrip();
+        kick();
+    }
+
+    /** Latest clipboard text offered for one-tap paste in the toolbar (null = none). */
+    void setQuickClip(String s) {
+        quickClip = s;
+        refreshStrip();
         invalidate();
     }
 
     /** The language name lights up on the space bar, then fades back to "space". */
     void flashLanguage(String name) {
         flashLabel = name;
-        flashAlpha = 1f;
-        if (flashAnim != null) flashAnim.cancel();
-        flashAnim = ValueAnimator.ofFloat(1f, 0f);
-        flashAnim.setStartDelay(900);
-        flashAnim.setDuration(450);
-        flashAnim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-            @Override
-            public void onAnimationUpdate(ValueAnimator a) {
-                flashAlpha = (Float) a.getAnimatedValue();
-                invalidate();
-            }
-        });
-        flashAnim.start();
-        invalidate();
+        refreshLabels();
+        flashT.v = animOn() ? 0f : 1f;
+        flashT.target = 1f;
+        handler.removeCallbacks(flashOut);
+        handler.postDelayed(flashOut, 950);
+        kick();
     }
 
     void cancelTouch() {
         endTouch();
     }
 
+    private boolean animOn() {
+        return prefs.animSpeed != Prefs.ANIM_OFF;
+    }
+
+    private boolean upper() {
+        return lettersMode && shiftState != SHIFT_OFF;
+    }
+
+    // ---------------------------------------------------------------- animation engine
+
+    private void kick() {
+        invalidate();
+    }
+
+    /** Eases every value toward its target. Returns true while anything is still moving. */
+    private boolean step(float dt) {
+        if (!animOn()) {
+            snapAll();
+            return false;
+        }
+        float base = prefs.animSpeed == Prefs.ANIM_FAST ? 0.55f : 1f;
+        boolean moving = false;
+        moving |= ease(caseT, dt, 55 * base);
+        moving |= ease(labelsT, dt, 70 * base);
+        moving |= ease(flashT, dt, (flashT.target > flashT.v ? 60 : 160) * base);
+        moving |= ease(bubbleT, dt, (bubbleT.target > bubbleT.v ? 22 : 45) * base);
+        moving |= ease(altsT, dt, 45 * base);
+        moving |= ease(layoutT, dt, 40 * base);
+        moving |= ease(accentT, dt, 70 * base);
+        moving |= ease(shiftT, dt, 45 * base);
+        moving |= ease(stripT, dt, 70 * base);
+        if (layout != null) {
+            for (Key[] row : layout.rows) {
+                for (Key k : row) moving |= easeKey(k, dt, base);
+            }
+        }
+        moving |= easeKey(globeKey, dt, base);
+        return moving;
+    }
+
+    private static boolean ease(Anim a, float dt, float tau) {
+        if (a.v == a.target) return false;
+        float k = 1f - (float) Math.exp(-dt / tau);
+        a.v += (a.target - a.v) * k;
+        if (Math.abs(a.target - a.v) < 0.002f) {
+            a.v = a.target;
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean easeKey(Key k, float dt, float base) {
+        if (k.press == k.pressTarget) return false;
+        // Presses light up almost instantly; releases fade out gently.
+        float tau = (k.pressTarget > k.press ? 16 : 90) * base;
+        float f = 1f - (float) Math.exp(-dt / tau);
+        k.press += (k.pressTarget - k.press) * f;
+        if (Math.abs(k.pressTarget - k.press) < 0.003f) {
+            k.press = k.pressTarget;
+            return false;
+        }
+        return true;
+    }
+
+    private void snapAll() {
+        Anim[] all = {caseT, labelsT, flashT, bubbleT, altsT, layoutT, accentT, shiftT, stripT};
+        for (Anim a : all) a.v = a.target;
+        if (layout != null) for (Key[] row : layout.rows) for (Key k : row) k.press = k.pressTarget;
+        globeKey.press = globeKey.pressTarget;
+    }
+
+    private void setPressed(Key k, boolean on, float x, float y) {
+        if (k == null) return;
+        k.pressTarget = on ? 1f : 0f;
+        if (on) {
+            k.touchX = x;
+            k.touchY = y;
+        }
+    }
+
     // ---------------------------------------------------------------- metrics & layout
 
     private void computeMetrics() {
-        boolean land = getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
-        if (land) {
-            stripH = dp(38); topPad = dp(6); keyH = dp(34); vGap = dp(7); bottomPad = dp(3); globeH = dp(30);
-        } else {
-            stripH = dp(46); topPad = dp(10); keyH = dp(42); vGap = dp(12); bottomPad = dp(4); globeH = dp(40);
-        }
-        hGap = dp(6);
-        side = dp(3);
-        radius = dp(5);
-        keysTop = stripH + topPad;
-    }
-
-    private float totalHeight() {
-        return keysTop + 4 * keyH + 3 * vGap + bottomPad + globeH;
+        measureRows = prefs.numberRow ? 5 : 4;
+        m = Metrics.compute(prefs, getResources(), measureRows);
+        keysTop = m.keysTop();
     }
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         computeMetrics();
         int w = MeasureSpec.getSize(widthMeasureSpec);
-        setMeasuredDimension(w, (int) Math.ceil(totalHeight()));
+        setMeasuredDimension(w, (int) Math.ceil(m.totalHeight(measureRows)));
     }
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         layoutKeys();
+        buildShaders();
     }
 
     private void layoutKeys() {
-        if (layout == null || getWidth() == 0) return;
+        if (layout == null || getWidth() == 0 || m == null) return;
         float W = getWidth();
         int cols = layout.cols;
-        float unit = (W - 2 * side - (cols - 1) * hGap) / cols;
-        float y = keysTop;
+        float unit = (W - 2 * m.side - (cols - 1) * m.hGap) / cols;
         Key[][] rows = layout.rows;
-        globeTop = keysTop + rows.length * keyH + (rows.length - 1) * vGap + bottomPad;
-        for (int r = 0; r < rows.length; r++) {
+        int n = rows.length;
+        // A page with fewer rows than the tallest page gets taller keys, so the height never jumps.
+        float area = measureRows * m.keyH + (measureRows - 1) * m.vGap;
+        float kh = (area - (n - 1) * m.vGap) / n;
+        globeTop = keysTop + area + m.bottomPad;
+        float y = keysTop;
+        for (int r = 0; r < n; r++) {
             Key[] row = rows[r];
-            boolean last = r == rows.length - 1;
-            if (last) layoutBottom(row, y, W);
-            else layoutRow(row, y, W, unit);
+            boolean last = r == n - 1;
+            if (last) layoutBottom(row, y, W, kh);
+            else layoutRow(row, y, W, unit, kh);
 
-            float top = r == 0 ? stripH : y - vGap / 2;
-            float bottom = last ? globeTop : y + keyH + vGap / 2;
+            float top = r == 0 ? m.stripH : y - m.vGap / 2;
+            float bottom = last ? (m.globeH > 0 ? globeTop : getHeight()) : y + kh + m.vGap / 2;
             for (int i = 0; i < row.length; i++) {
                 Key k = row[i];
                 float left = i == 0 ? 0 : (row[i - 1].rect.right + k.rect.left) / 2;
                 float right = i == row.length - 1 ? W : (k.rect.right + row[i + 1].rect.left) / 2;
                 k.hit.set(left, top, right, bottom);
             }
-            y += keyH + vGap;
+            y += kh + m.vGap;
         }
         float gw = Math.min(dp(64), W / 5);
-        globeKey.rect.set(dp(8), globeTop, dp(8) + gw - dp(16), globeTop + globeH);
+        globeKey.rect.set(dp(8), globeTop, dp(8) + gw - dp(16), globeTop + m.globeH);
         globeKey.hit.set(0, globeTop, gw, getHeight());
+        refreshLabels();
+        refreshStrip();
     }
 
-    private void layoutRow(Key[] row, float y, float W, float unit) {
+    private void layoutRow(Key[] row, float y, float W, float unit, float kh) {
         int n = row.length;
         float charsW = 0;
         int nc = 0;
@@ -278,48 +437,117 @@ final class KeyboardView extends View {
                 nc++;
             }
         }
-        if (nc > 1) charsW += (nc - 1) * hGap;
+        if (nc > 1) charsW += (nc - 1) * m.hGap;
         float x = (W - charsW) / 2;
         for (Key k : row) {
             if (k.type != Key.CHAR) continue;
-            k.rect.set(x, y, x + unit * k.width, y + keyH);
-            x += unit * k.width + hGap;
+            k.rect.set(x, y, x + unit * k.width, y + kh);
+            x += unit * k.width + m.hGap;
         }
-        float avail = (W - 2 * side - charsW) / 2 - hGap;
+        float avail = (W - 2 * m.side - charsW) / 2 - m.hGap;
         float sw = Math.max(unit * 0.8f, Math.min(unit * 1.32f, avail));
-        if (row[0].type != Key.CHAR) row[0].rect.set(side, y, side + sw, y + keyH);
-        if (n > 1 && row[n - 1].type != Key.CHAR) row[n - 1].rect.set(W - side - sw, y, W - side, y + keyH);
+        if (row[0].type != Key.CHAR) row[0].rect.set(m.side, y, m.side + sw, y + kh);
+        if (n > 1 && row[n - 1].type != Key.CHAR) row[n - 1].rect.set(W - m.side - sw, y, W - m.side, y + kh);
     }
 
-    private void layoutBottom(Key[] row, float y, float W) {
-        float avail = W - 2 * side - (row.length - 1) * hGap;
+    private void layoutBottom(Key[] row, float y, float W, float kh) {
+        float avail = W - 2 * m.side - (row.length - 1) * m.hGap;
         float fixed = 0;
         float[] w = new float[row.length];
+        boolean five = row.length >= 5;
         for (int i = 0; i < row.length; i++) {
             switch (row[i].type) {
                 case Key.MODE:
                 case Key.EMOJI:
-                    w[i] = avail * 0.118f;
+                case Key.GLOBE:
+                    w[i] = avail * (five ? 0.105f : 0.118f);
                     break;
                 case Key.RETURN:
-                    w[i] = avail * 0.25f;
+                    w[i] = avail * (five ? 0.22f : 0.25f);
                     break;
                 default:
                     w[i] = -1;
             }
             if (w[i] > 0) fixed += w[i];
         }
-        float x = side;
+        float x = m.side;
         for (int i = 0; i < row.length; i++) {
             float kw = w[i] > 0 ? w[i] : avail - fixed;
-            row[i].rect.set(x, y, x + kw, y + keyH);
-            x += kw + hGap;
+            row[i].rect.set(x, y, x + kw, y + kh);
+            x += kw + m.hGap;
         }
+    }
+
+    private Key spaceKey() {
+        if (layout == null) return null;
+        for (Key k : layout.rows[layout.rows.length - 1]) if (k.type == Key.SPACE) return k;
+        return null;
+    }
+
+    private Key returnKey() {
+        if (layout == null) return null;
+        for (Key k : layout.rows[layout.rows.length - 1]) if (k.type == Key.RETURN) return k;
+        return null;
+    }
+
+    /** Pre-shortens labels so drawing never allocates. */
+    private void refreshLabels() {
+        if (m == null) return;
+        text.setTypeface(Typeface.DEFAULT);
+        text.setTextSize(m.labelSize);
+        Key s = spaceKey(), r = returnKey();
+        float sw = s != null ? s.rect.width() - dp(8) : dp(120);
+        float rw = r != null ? r.rect.width() - dp(6) : dp(80);
+        spaceShown = TextUtils.ellipsize(spaceLabel, text, Math.max(sw, 1), TextUtils.TruncateAt.END);
+        returnShown = TextUtils.ellipsize(returnLabel, text, Math.max(rw, 1), TextUtils.TruncateAt.END);
+        flashShown = flashLabel == null ? "" :
+                TextUtils.ellipsize(flashLabel, text, Math.max(sw, 1), TextUtils.TruncateAt.END);
+    }
+
+    private void refreshStrip() {
+        if (getWidth() == 0 || m == null) return;
+        float cw = getWidth() / 3f;
+        text.setTextSize(dp(16.5f));
+        for (int i = 0; i < 3; i++) {
+            text.setTypeface(i == 1 ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+            suggestionsShown[i] = suggestions[i] == null ? null :
+                    TextUtils.ellipsize(suggestions[i], text, cw - dp(14), TextUtils.TruncateAt.END);
+        }
+        text.setTypeface(Typeface.DEFAULT);
+        text.setTextSize(dp(14));
+        if (quickClip != null) {
+            String one = quickClip.replace('\n', ' ').trim();
+            quickClipShown = TextUtils.ellipsize("📋 " + one, text, getWidth() - toolW() * 2 - dp(24),
+                    TextUtils.TruncateAt.END);
+        } else {
+            quickClipShown = null;
+        }
+    }
+
+    private float toolW() {
+        return Math.min(m.stripH * 1.25f, dp(58));
+    }
+
+    private void buildShaders() {
+        float h = 1f;
+        keyShader = new LinearGradient(0, 0, 0, h,
+                new int[]{theme.keyTop, theme.keyMid, theme.keyBottom}, new float[]{0f, 0.45f, 1f},
+                Shader.TileMode.CLAMP);
+        specShader = new LinearGradient(0, 0, 0, h,
+                new int[]{theme.specTop, theme.specMid, theme.specBottom}, new float[]{0f, 0.45f, 1f},
+                Shader.TileMode.CLAMP);
+        rimShader = new LinearGradient(0, 0, 0, h, theme.rimTop, theme.rimBottom, Shader.TileMode.CLAMP);
+        bubbleShader = new LinearGradient(0, 0, 0, h, theme.bubbleTop, theme.bubbleBottom, Shader.TileMode.CLAMP);
+        panelShader = new LinearGradient(0, 0, 0, h, theme.bgTop, theme.bgBottom, Shader.TileMode.CLAMP);
+        glowShader = new RadialGradient(0, 0, 1,
+                (theme.dark ? 0x59 : 0x8C) << 24 | (theme.glow & 0xFFFFFF), theme.glow & 0xFFFFFF,
+                Shader.TileMode.CLAMP);
+        glowPaint.setShader(glowShader);
     }
 
     private Key findKey(float x, float y) {
         if (layout == null) return null;
-        if (y >= globeTop) return globeKey.hit.contains(x, y) ? globeKey : null;
+        if (m.globeH > 0 && y >= globeTop) return globeKey.hit.contains(x, y) ? globeKey : null;
         for (Key[] row : layout.rows) {
             for (Key k : row) {
                 if (k.hit.contains(x, y)) return k;
@@ -328,10 +556,17 @@ final class KeyboardView extends View {
         return null;
     }
 
-    private int suggestionIndex(float x) {
-        int i = (int) (x / (getWidth() / 3f));
-        if (i < 0 || i > 2 || suggestions[i] == null) return -1;
-        return i;
+    private int stripTarget(float x) {
+        if (stripT.target > 0.5f) {
+            int i = (int) (x / (getWidth() / 3f));
+            if (i < 0 || i > 2 || suggestions[i] == null) return -1;
+            return i;
+        }
+        float tw = toolW();
+        if (x < tw) return TOOL_CLIP;
+        if (x > getWidth() - tw) return TOOL_SETTINGS;
+        if (quickClipShown != null) return TOOL_PASTE;
+        return -1;
     }
 
     // ---------------------------------------------------------------- touch
@@ -341,6 +576,7 @@ final class KeyboardView extends View {
     public boolean onTouchEvent(MotionEvent e) {
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                getParent().requestDisallowInterceptTouchEvent(true);
                 begin(e.getPointerId(0), e.getX(), e.getY());
                 return true;
             case MotionEvent.ACTION_POINTER_DOWN: {
@@ -387,10 +623,11 @@ final class KeyboardView extends View {
         lastX = x;
         lastY = y;
         downX = x;
-        if (y < stripH) {
+        if (y < m.stripH) {
             touchKind = STRIP;
-            pressedSuggestion = suggestionIndex(x);
-            invalidate();
+            pressedStrip = stripTarget(x);
+            if (pressedStrip >= 0) listener.onFeedback(Key.CHAR);
+            kick();
             return;
         }
         Key k = findKey(x, y);
@@ -408,6 +645,7 @@ final class KeyboardView extends View {
         modeSlide = false;
         movedOff = false;
         listener.onFeedback(k.type);
+        int lp = prefs.longPressMs;
         switch (k.type) {
             case Key.DELETE:
                 deleteCount = 0;
@@ -423,24 +661,39 @@ final class KeyboardView extends View {
                 listener.onModeKey();
                 modeSlide = true;
                 downKey = findKey(x, y);
+                k = downKey;
                 break;
             case Key.MORE:
                 listener.onMoreKey();
                 downKey = findKey(x, y);
+                k = downKey;
                 break;
             case Key.CHAR:
-                if (k.alts != null) handler.postDelayed(longPress, 380);
+                if (k.alts != null) handler.postDelayed(longPress, lp);
+                showBubble(k);
                 break;
             case Key.SPACE:
-                handler.postDelayed(longPress, 420);
+                if (prefs.trackpad) handler.postDelayed(longPress, lp + 40);
                 break;
             case Key.GLOBE:
-                handler.postDelayed(longPress, 500);
+                handler.postDelayed(longPress, Math.max(lp, 450));
                 break;
             default:
                 break;
         }
-        invalidate();
+        setPressed(k, true, x, y);
+        kick();
+    }
+
+    private void showBubble(Key k) {
+        if (!prefs.popups) return;
+        if (bubbleKey != k && bubbleT.v > 0.05f && bubbleKey != null) {
+            // Sliding to a neighbour: the bubble jumps over with a quick re-pop.
+            bubbleT.v = Math.min(bubbleT.v, 0.7f);
+        }
+        bubbleKey = k;
+        bubbleT.target = 1;
+        if (!animOn()) bubbleT.v = 1;
     }
 
     private void move(float x, float y) {
@@ -448,9 +701,9 @@ final class KeyboardView extends View {
         lastX = x;
         lastY = y;
         if (touchKind == STRIP) {
-            if (pressedSuggestion >= 0 && (suggestionIndex(x) != pressedSuggestion || y > stripH + dp(24))) {
-                pressedSuggestion = -1;
-                invalidate();
+            if (pressedStrip >= 0 && (stripTarget(x) != pressedStrip || y > m.stripH + dp(24))) {
+                pressedStrip = -1;
+                kick();
             }
             return;
         }
@@ -473,11 +726,17 @@ final class KeyboardView extends View {
             int s = altIndexAt(x);
             if (s != altSel) {
                 altSel = s;
-                invalidate();
+                listener.onFeedback(Key.CHAR);
+                kick();
             }
             return;
         }
-        if (downKey.type == Key.SPACE && Math.abs(x - downX) > dp(18)) {
+        if (downKey.type != Key.CHAR || prefs.liquidTouch) {
+            downKey.touchX = x;
+            downKey.touchY = y;
+            if (downKey.type != Key.CHAR) invalidate();
+        }
+        if (downKey.type == Key.SPACE && prefs.trackpad && Math.abs(x - downX) > dp(18)) {
             // A swipe along the space bar also moves the cursor.
             handler.removeCallbacks(longPress);
             startTrackpad();
@@ -487,24 +746,32 @@ final class KeyboardView extends View {
             Key k = findKey(x, y);
             if (k != null && k != downKey && (k.type == Key.CHAR || (modeSlide && k.type == Key.MODE))) {
                 handler.removeCallbacks(longPress);
+                setPressed(downKey, false, 0, 0);
                 downKey = k;
+                setPressed(k, true, x, y);
                 if (k.type == Key.CHAR) {
                     movedOff = true;
-                    if (k.alts != null) handler.postDelayed(longPress, 380);
+                    showBubble(k);
+                    if (k.alts != null) handler.postDelayed(longPress, prefs.longPressMs);
+                } else {
+                    bubbleT.target = 0;
                 }
-                invalidate();
+                kick();
             }
         }
     }
 
     private void release(float x, float y) {
         if (touchKind == STRIP) {
-            int i = pressedSuggestion;
-            pressedSuggestion = -1;
+            int i = pressedStrip;
+            pressedStrip = -1;
             touchKind = NONE;
             pointerId = -1;
-            invalidate();
-            if (i >= 0) listener.onSuggestion(i);
+            kick();
+            if (i == TOOL_CLIP) listener.onClipboard();
+            else if (i == TOOL_SETTINGS) listener.onSettings();
+            else if (i == TOOL_PASTE) listener.onQuickPaste();
+            else if (i >= 0) listener.onSuggestion(i);
             return;
         }
         int kind = touchKind;
@@ -551,16 +818,20 @@ final class KeyboardView extends View {
         handler.removeCallbacks(repeatDelete);
         if (trackpad) {
             trackpad = false;
-            animateLabels(1f);
+            labelsT.target = 1;
         }
+        if (downKey != null) setPressed(downKey, false, 0, 0);
+        bubbleT.target = 0;
         altsShown = false;
+        altsT.target = 0;
         downKey = null;
         modeSlide = false;
         movedOff = false;
         touchKind = NONE;
         pointerId = -1;
-        pressedSuggestion = -1;
-        invalidate();
+        pressedStrip = -1;
+        if (!animOn()) snapAll();
+        kick();
     }
 
     private void onLongPress() {
@@ -583,28 +854,14 @@ final class KeyboardView extends View {
     }
 
     private void startTrackpad() {
-        if (trackpad) return;
+        if (trackpad || !prefs.trackpad) return;
         trackpad = true;
         longFired = true;
         accX = 0;
         accY = 0;
         listener.onFeedback(Key.CHAR);
-        animateLabels(0f);
-    }
-
-    private void animateLabels(float target) {
-        if (labelAnim != null) labelAnim.cancel();
-        labelAnim = ValueAnimator.ofFloat(labelAlpha, target);
-        labelAnim.setDuration(200);
-        labelAnim.setInterpolator(new DecelerateInterpolator());
-        labelAnim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-            @Override
-            public void onAnimationUpdate(ValueAnimator a) {
-                labelAlpha = (Float) a.getAnimatedValue();
-                invalidate();
-            }
-        });
-        labelAnim.start();
+        labelsT.target = 0;
+        kick();
     }
 
     private void showAlts(Key k) {
@@ -614,24 +871,29 @@ final class KeyboardView extends View {
         altPad = dp(5);
         altCellW = Math.max(k.rect.width(), dp(28));
         float w = n * altCellW + 2 * altPad;
-        float h = keyH * 1.12f;
+        float h = m.keyH * 1.12f;
         float W = getWidth();
         float left = k.rect.centerX() - altCellW / 2 - altPad;
         boolean reversed = false;
-        if (left + w > W - side) {
+        if (left + w > W - m.side) {
             // No room on the right: grow to the left, first variant still above the key.
             left = k.rect.centerX() + altCellW / 2 + altPad - w;
             reversed = true;
         }
-        left = Math.max(side, Math.min(left, W - side - w));
+        left = Math.max(m.side, Math.min(left, W - m.side - w));
         float top = Math.max(dp(1), k.rect.top - dp(9) - h);
         altsRect.set(left, top, left + w, top + h);
         alts = new String[n];
         for (int i = 0; i < n; i++) alts[i] = reversed ? a[n - 1 - i] : a[i];
         altSel = altIndexAt(k.rect.centerX());
+        altsKey = k;
         altsShown = true;
+        altsT.v = animOn() ? Math.max(altsT.v, 0.15f) : 1f;
+        altsT.target = 1;
+        bubbleT.target = 0;
+        bubbleT.v = 0;
         listener.onFeedback(Key.CHAR);
-        invalidate();
+        kick();
     }
 
     private int altIndexAt(float x) {
@@ -644,34 +906,32 @@ final class KeyboardView extends View {
         listener.onText(applyCase(k.output));
     }
 
-    private boolean upper() {
-        return lettersMode && shiftState != SHIFT_OFF;
-    }
-
     private String applyCase(String s) {
         return upper() ? s.toUpperCase(locale) : s;
-    }
-
-    private String labelOf(Key k) {
-        return upper() ? k.label.toUpperCase(locale) : k.label;
     }
 
     // ---------------------------------------------------------------- drawing
 
     @Override
     protected void onDraw(Canvas c) {
-        c.drawColor(theme.bg);
+        long now = SystemClock.uptimeMillis();
+        float dt = frameActive ? Math.min(now - lastFrame, 48) : 16;
+        lastFrame = now;
+        boolean moving = step(dt);
+
+        drawPanel(c);
         drawStrip(c);
         if (layout != null) {
             for (Key[] row : layout.rows) {
                 for (Key k : row) drawKey(c, k);
             }
         }
-        drawGlobe(c);
-        if (touchKind == KEY && downKey != null && !trackpad) {
-            if (altsShown) drawAlts(c, downKey);
-            else if (downKey.type == Key.CHAR) drawPreview(c, downKey);
-        }
+        drawGlobeStrip(c);
+        if (bubbleKey != null && bubbleT.v > 0.004f && labelsT.v > 0.5f) drawPreview(c, bubbleKey, bubbleT.v);
+        if (altsKey != null && altsT.v > 0.004f) drawAlts(c, altsKey, altsT.v);
+
+        frameActive = moving;
+        if (moving) postInvalidateOnAnimation();
     }
 
     private static int alpha(int color, float a) {
@@ -679,129 +939,240 @@ final class KeyboardView extends View {
         return (color & 0x00FFFFFF) | (al << 24);
     }
 
+    private static int blend(int a, int b, float t) {
+        if (t <= 0) return a;
+        if (t >= 1) return b;
+        int aa = a >>> 24, ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+        int ba = b >>> 24, br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+        return (Math.round(aa + (ba - aa) * t) << 24)
+                | (Math.round(ar + (br - ar) * t) << 16)
+                | (Math.round(ag + (bg - ag) * t) << 8)
+                | Math.round(ab + (bb - ab) * t);
+    }
+
+    private void shaderAt(Shader s, float top, float h) {
+        matrix.setScale(1, h);
+        matrix.postTranslate(0, top);
+        s.setLocalMatrix(matrix);
+    }
+
+    private void drawPanel(Canvas c) {
+        if (!theme.glass) {
+            c.drawColor(theme.bg);
+            return;
+        }
+        shaderAt(panelShader, 0, getHeight());
+        fill.setShader(panelShader);
+        c.drawRect(0, 0, getWidth(), getHeight(), fill);
+        fill.setShader(null);
+        // Glass edge: a fine bright line along the top.
+        fill.setColor(theme.dark ? 0x26FFFFFF : 0xB3FFFFFF);
+        c.drawRect(0, 0, getWidth(), Math.max(1f, dp(0.6f)), fill);
+    }
+
     private void drawStrip(Canvas c) {
-        boolean any = suggestions[0] != null || suggestions[1] != null || suggestions[2] != null;
-        if (!any) return;
+        float sv = stripT.v;
+        // Toolbar (clipboard / quick paste / settings) fades out as suggestions fade in.
+        if (sv < 0.999f) drawToolbar(c, 1f - sv);
+        if (sv <= 0.001f) return;
+
         float cw = getWidth() / 3f;
-        text.setTypeface(Typeface.DEFAULT);
         text.setTextSize(dp(16.5f));
         for (int i = 0; i < 3; i++) {
-            String s = suggestions[i];
+            CharSequence s = suggestionsShown[i];
             if (s == null) continue;
-            if (i == pressedSuggestion) {
+            if (i == pressedStrip) {
                 fill.setColor(theme.highlight);
-                tmp.set(i * cw + dp(3), dp(5), (i + 1) * cw - dp(3), stripH - dp(5));
-                c.drawRoundRect(tmp, dp(7), dp(7), fill);
+                tmp.set(i * cw + dp(3), dp(5), (i + 1) * cw - dp(3), m.stripH - dp(5));
+                c.drawRoundRect(tmp, dp(9), dp(9), fill);
             }
-            text.setColor(theme.text);
+            text.setColor(alpha(theme.text, sv));
             text.setTypeface(i == 1 ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-            CharSequence shown = TextUtils.ellipsize(s, text, cw - dp(14), TextUtils.TruncateAt.END);
-            float base = stripH / 2 - (text.descent() + text.ascent()) / 2;
-            c.drawText(shown, 0, shown.length(), i * cw + cw / 2, base, text);
+            float base = m.stripH / 2 - (text.descent() + text.ascent()) / 2;
+            c.drawText(s, 0, s.length(), i * cw + cw / 2, base, text);
         }
-        stroke.setColor(theme.separator);
+        text.setTypeface(Typeface.DEFAULT);
+        stroke.setColor(alpha(theme.separator, sv));
         stroke.setStrokeWidth(Math.max(1f, dp(0.8f)));
         for (int i = 1; i < 3; i++) {
-            c.drawLine(i * cw, stripH * 0.27f, i * cw, stripH * 0.73f, stroke);
+            c.drawLine(i * cw, m.stripH * 0.27f, i * cw, m.stripH * 0.73f, stroke);
+        }
+    }
+
+    private void drawToolbar(Canvas c, float a) {
+        float tw = toolW();
+        float cy = m.stripH / 2;
+        int col = alpha(theme.text, a * (theme.dark ? 0.8f : 0.6f));
+        if (pressedStrip == TOOL_CLIP || pressedStrip == TOOL_SETTINGS) {
+            fill.setColor(alpha(theme.highlight, a));
+            float cx = pressedStrip == TOOL_CLIP ? tw / 2 : getWidth() - tw / 2;
+            c.drawCircle(cx, cy, Math.min(m.stripH * 0.42f, dp(19)), fill);
+        }
+        drawClipboardIcon(c, tw / 2, cy, col);
+        drawSlidersIcon(c, getWidth() - tw / 2, cy, col);
+        if (quickClipShown != null) {
+            text.setTypeface(Typeface.DEFAULT);
+            text.setTextSize(dp(14));
+            float w = Math.min(text.measureText(quickClipShown, 0, quickClipShown.length()) + dp(26),
+                    getWidth() - 2 * tw - dp(12));
+            float cx = getWidth() / 2f;
+            tmp.set(cx - w / 2, cy - dp(15), cx + w / 2, cy + dp(15));
+            fill.setColor(alpha(pressedStrip == TOOL_PASTE ? theme.highlight : (theme.dark ? 0x24FFFFFF : 0x99FFFFFF), a));
+            c.drawRoundRect(tmp, dp(15), dp(15), fill);
+            text.setColor(alpha(theme.text, a));
+            float base = cy - (text.descent() + text.ascent()) / 2;
+            c.drawText(quickClipShown, 0, quickClipShown.length(), cx, base, text);
         }
     }
 
     private void drawKey(Canvas c, Key k) {
-        boolean pressed = k == downKey && touchKind == KEY && !trackpad;
-        if (pressed && k.type == Key.CHAR) return; // covered by the bubble or the variants panel
-
-        int bg;
-        int fg = theme.text;
-        switch (k.type) {
-            case Key.CHAR:
-                bg = theme.key;
-                break;
-            case Key.SPACE:
-                bg = pressed ? theme.special : theme.key;
-                break;
-            case Key.RETURN:
-                if (returnAccent) {
-                    bg = pressed ? theme.key : theme.accent;
-                    fg = pressed ? theme.text : theme.accentText;
-                } else {
-                    bg = pressed ? theme.key : theme.special;
-                }
-                break;
-            case Key.SHIFT:
-                if (shiftState != SHIFT_OFF) {
-                    bg = theme.shiftOnBg;
-                    fg = theme.shiftOnFg;
-                } else {
-                    bg = pressed ? theme.key : theme.special;
-                }
-                break;
-            default:
-                bg = pressed ? theme.key : theme.special;
-                break;
-        }
-        if (trackpad || labelAlpha < 1f) {
-            // Trackpad: keys turn into blank tiles.
-            if (k.type == Key.RETURN && returnAccent) {
-                bg = blend(bg, theme.special, 1f - labelAlpha);
-            }
-        }
-
         RectF r = k.rect;
-        fill.setColor(theme.shadow);
-        tmp.set(r.left, r.top + dp(1), r.right, r.bottom + dp(1));
-        c.drawRoundRect(tmp, radius, radius, fill);
-        fill.setColor(bg);
-        c.drawRoundRect(r, radius, radius, fill);
+        float p = k.press;
+        boolean bubbleCovers = k == bubbleKey && bubbleT.v > 0.97f;
+        if (bubbleCovers || (altsShown && k == altsKey && altsT.v > 0.6f)) return;
 
-        int col = alpha(fg, labelAlpha);
+        boolean special = k.isSpecial();
+        float accent = k.type == Key.RETURN ? accentT.v : 0f;
+        float shiftOn = k.type == Key.SHIFT ? shiftT.v : 0f;
+
+        // Shadow under the key (clipped so it never darkens translucent glass).
+        drawShadow(c, r, m.radius);
+
+        // Body
+        if (theme.glass) {
+            Shader s = special ? specShader : keyShader;
+            shaderAt(s, r.top, r.height());
+            fill.setShader(s);
+            c.drawRoundRect(r, m.radius, m.radius, fill);
+            fill.setShader(null);
+        } else {
+            fill.setColor(special ? theme.specTop : theme.keyTop);
+            c.drawRoundRect(r, m.radius, m.radius, fill);
+        }
+        if (accent > 0.001f) {
+            fill.setColor(alpha(theme.accent, accent));
+            c.drawRoundRect(r, m.radius, m.radius, fill);
+        }
+        if (shiftOn > 0.001f) {
+            fill.setColor(alpha(theme.shiftOnBg, shiftOn));
+            c.drawRoundRect(r, m.radius, m.radius, fill);
+        }
+        // Pressed state: specials light up, space and letters dim slightly (iOS).
+        if (p > 0.001f) {
+            int overlay = special ? theme.pressSpecial : theme.pressSpace;
+            if (k.type == Key.CHAR && !prefs.popups) overlay = theme.pressSpace;
+            fill.setColor(alpha(overlay, p));
+            c.drawRoundRect(r, m.radius, m.radius, fill);
+            if (theme.glass && prefs.liquidTouch) drawGlow(c, k, p);
+        }
+        // Glass rim and sheen
+        if (theme.glass) drawRim(c, r, m.radius, 1f);
+
+        // Content
+        float la = labelsT.v * (k.type == Key.SPACE || k.type == Key.RETURN ? 1f : layoutT.v);
+        int fg = blend(theme.text, theme.accentText, accent);
+        fg = blend(fg, theme.shiftOnFg, shiftOn);
+        if (accent > 0 && p > 0) fg = blend(fg, theme.text, p * accent);
+        int col = alpha(fg, la);
         float cx = r.centerX(), cy = r.centerY();
         switch (k.type) {
-            case Key.CHAR: {
+            case Key.CHAR:
                 text.setTypeface(Typeface.DEFAULT);
-                text.setTextSize(Math.min(dp(23), r.width() * 0.78f));
-                text.setColor(col);
-                drawCentered(c, labelOf(k), cx, cy - dp(1));
+                text.setTextSize(Math.min(m.letterSize, r.width() * 0.8f));
+                if (lettersMode && caseT.v > 0.001f && caseT.v < 0.999f) {
+                    text.setColor(alpha(fg, la * (1f - caseT.v)));
+                    drawCentered(c, k.label, cx, cy - dp(1));
+                    text.setColor(alpha(fg, la * caseT.v));
+                    drawCentered(c, k.upper, cx, cy - dp(1));
+                } else {
+                    text.setColor(col);
+                    drawCentered(c, lettersMode && caseT.v >= 0.999f ? k.upper : k.label, cx, cy - dp(1));
+                }
                 break;
-            }
             case Key.SHIFT:
                 drawShift(c, cx, cy, col, shiftState);
                 break;
             case Key.DELETE:
-                drawDelete(c, cx, cy, col, pressed);
+                drawDelete(c, cx, cy, col);
                 break;
             case Key.EMOJI:
                 drawSmiley(c, cx, cy, col);
                 break;
+            case Key.GLOBE:
+                drawGlobeIcon(c, cx, cy, col, Math.min(dp(10.5f), r.height() * 0.26f));
+                break;
             case Key.SPACE: {
                 text.setTypeface(Typeface.DEFAULT);
-                text.setTextSize(dp(16));
-                if (flashLabel != null && flashAlpha > 0f) {
-                    text.setColor(alpha(col, flashAlpha));
-                    drawCentered(c, flashLabel, cx, cy);
-                    text.setColor(alpha(col, 1f - flashAlpha));
-                } else {
-                    text.setColor(col);
+                text.setTextSize(m.labelSize);
+                float f = flashT.v;
+                if (flashLabel != null && f > 0.001f) {
+                    text.setColor(alpha(fg, la * f));
+                    drawCentered(c, flashShown, cx, cy);
                 }
-                drawCentered(c, fit(spaceLabel, r.width()), cx, cy);
+                text.setColor(alpha(fg, la * (1f - f)));
+                drawCentered(c, spaceShown, cx, cy);
                 break;
             }
             case Key.RETURN:
-            case Key.MODE:
-            case Key.MORE: {
-                String s = k.type == Key.RETURN ? returnLabel : k.label;
                 text.setTypeface(Typeface.DEFAULT);
-                text.setTextSize(dp(16));
+                text.setTextSize(m.labelSize);
                 text.setColor(col);
-                drawCentered(c, fit(s, r.width()), cx, cy);
+                drawCentered(c, returnShown, cx, cy);
                 break;
-            }
+            case Key.MODE:
+            case Key.MORE:
+                text.setTypeface(Typeface.DEFAULT);
+                text.setTextSize(m.labelSize);
+                text.setColor(col);
+                drawCentered(c, k.label, cx, cy);
+                break;
             default:
                 break;
         }
     }
 
-    private CharSequence fit(String s, float w) {
-        return TextUtils.ellipsize(s, text, w - dp(6), TextUtils.TruncateAt.END);
+    private void drawShadow(Canvas c, RectF r, float rad) {
+        int sh = theme.shadow;
+        if (Build.VERSION.SDK_INT >= 26) {
+            clip.reset();
+            clip.addRoundRect(r, rad, rad, Path.Direction.CW);
+            c.save();
+            c.clipOutPath(clip);
+        }
+        fill.setColor(sh);
+        tmp.set(r.left, r.top + dp(1), r.right, r.bottom + dp(1));
+        c.drawRoundRect(tmp, rad, rad, fill);
+        if (theme.glass) {
+            fill.setColor(alpha(sh, 0.45f));
+            tmp.set(r.left - dp(0.3f), r.top + dp(1.8f), r.right + dp(0.3f), r.bottom + dp(2.2f));
+            c.drawRoundRect(tmp, rad + dp(1), rad + dp(1), fill);
+        }
+        if (Build.VERSION.SDK_INT >= 26) c.restore();
+    }
+
+    private void drawRim(Canvas c, RectF r, float rad, float a) {
+        float sw = Math.max(1f, dp(0.75f));
+        shaderAt(rimShader, r.top, r.height());
+        rim.setShader(rimShader);
+        rim.setStrokeWidth(sw);
+        rim.setAlpha(Math.round(255 * a));
+        tmp.set(r.left + sw / 2, r.top + sw / 2, r.right - sw / 2, r.bottom - sw / 2);
+        c.drawRoundRect(tmp, rad, rad, rim);
+        rim.setShader(null);
+        rim.setAlpha(255);
+    }
+
+    /** "Liquid" light that follows the finger inside a pressed glass key. */
+    private void drawGlow(Canvas c, Key k, float p) {
+        RectF r = k.rect;
+        float tx = Math.max(r.left, Math.min(r.right, k.touchX));
+        float ty = Math.max(r.top, Math.min(r.bottom, k.touchY));
+        float rad = Math.max(r.height() * 1.15f, dp(20));
+        matrix.setScale(rad, rad);
+        matrix.postTranslate(tx, ty);
+        glowShader.setLocalMatrix(matrix);
+        glowPaint.setAlpha(Math.round(255 * p));
+        c.drawRoundRect(r, m.radius, m.radius, glowPaint);
     }
 
     private void drawCentered(Canvas c, CharSequence s, float cx, float cy) {
@@ -809,19 +1180,10 @@ final class KeyboardView extends View {
         c.drawText(s, 0, s.length(), cx, base, text);
     }
 
-    private static int blend(int a, int b, float t) {
-        int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
-        int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
-        return 0xFF000000
-                | (Math.round(ar + (br - ar) * t) << 16)
-                | (Math.round(ag + (bg - ag) * t) << 8)
-                | Math.round(ab + (bb - ab) * t);
-    }
-
     /** Bubble shape that grows out of the key: rounded box on top, curved neck, the key itself below. */
     private void buildBubble(RectF b, RectF key) {
-        float rb = dp(9);
-        float r = radius;
+        float rb = Math.min(dp(11), b.height() / 3);
+        float r = m.radius;
         float L = key.left, R = key.right, T = key.top, B = key.bottom;
         float bb = b.bottom;
         float mid = (bb + T) / 2;
@@ -841,20 +1203,39 @@ final class KeyboardView extends View {
         path.close();
     }
 
-    private void drawBubbleShape(Canvas c) {
+    private void drawBubbleShape(Canvas c, float a) {
+        // Soft shadow
         c.save();
         c.translate(0, dp(1));
-        fill.setColor(alpha(theme.shadow, theme.dark ? 0.9f : 0.55f));
+        fill.setColor(alpha(theme.glass ? (theme.dark ? 0x99000000 : 0x40202A3A) : theme.shadow, a * (theme.dark ? 0.9f : 0.6f)));
+        c.drawPath(path, fill);
+        c.translate(0, dp(1.5f));
+        fill.setColor(alpha(theme.dark ? 0x4D000000 : 0x1A202A3A, a));
         c.drawPath(path, fill);
         c.restore();
-        fill.setColor(theme.key);
+        // Body
+        shaderAt(bubbleShader, bubble.top, bubbleKeyBottom() - bubble.top);
+        fill.setShader(bubbleShader);
+        fill.setAlpha(Math.round(255 * a));
         c.drawPath(path, fill);
+        fill.setShader(null);
+        fill.setAlpha(255);
+        if (theme.glass) {
+            rim.setShader(null);
+            rim.setStrokeWidth(Math.max(1f, dp(0.75f)));
+            rim.setColor(alpha(theme.dark ? 0x59FFFFFF : 0xFFFFFFFF, a));
+            c.drawPath(path, rim);
+        }
     }
 
-    private void drawPreview(Canvas c, Key k) {
+    private float bubbleKeyBottom() {
+        return bubbleKey != null ? bubbleKey.rect.bottom : bubble.bottom;
+    }
+
+    private void drawPreview(Canvas c, Key k, float t) {
         RectF kr = k.rect;
         float bw = kr.width() + dp(22);
-        float bh = keyH * 1.12f;
+        float bh = m.keyH * 1.12f;
         float neck = dp(9);
         float top = Math.max(dp(1), kr.top - neck - bh);
         float bottom = kr.top - neck;
@@ -862,46 +1243,60 @@ final class KeyboardView extends View {
         left = Math.max(dp(1), Math.min(left, getWidth() - dp(1) - bw));
         bubble.set(left, top, left + bw, bottom);
         buildBubble(bubble, kr);
-        drawBubbleShape(c);
+
+        // Pops up from the key: scales from its base and fades in.
+        float s = 0.62f + 0.38f * t;
+        c.save();
+        c.scale(s, s, kr.centerX(), kr.bottom);
+        drawBubbleShape(c, t);
         text.setTypeface(Typeface.DEFAULT);
-        text.setTextSize(Math.min(dp(34), bubble.height() * 0.8f));
-        text.setColor(theme.text);
-        drawCentered(c, labelOf(k), bubble.centerX(), bubble.centerY() + dp(1));
+        text.setTextSize(Math.min(m.bubbleTextSize, bubble.height() * 0.8f));
+        text.setColor(alpha(theme.text, t));
+        drawCentered(c, upper() ? k.upper : k.label, bubble.centerX(), bubble.centerY() + dp(1));
+        c.restore();
     }
 
-    private void drawAlts(Canvas c, Key k) {
+    private void drawAlts(Canvas c, Key k, float t) {
+        if (alts == null) return;
         bubble.set(altsRect);
         bubble.bottom = Math.min(altsRect.bottom, k.rect.top - dp(4));
         buildBubble(bubble, k.rect);
-        drawBubbleShape(c);
+        float s = 0.75f + 0.25f * t;
+        c.save();
+        c.scale(s, s, k.rect.centerX(), k.rect.bottom);
+        drawBubbleShape(c, t);
         text.setTypeface(Typeface.DEFAULT);
-        text.setTextSize(Math.min(dp(24), altCellW * 0.8f));
+        text.setTextSize(Math.min(m.letterSize * 1.05f, altCellW * 0.8f));
         for (int i = 0; i < alts.length; i++) {
             float l = altsRect.left + altPad + i * altCellW;
             float cy = bubble.centerY();
-            if (i == altSel) {
-                fill.setColor(theme.accent);
+            if (i == altSel && altsShown) {
+                fill.setColor(alpha(theme.accent, t));
                 tmp.set(l + dp(1), bubble.top + dp(5), l + altCellW - dp(1), bubble.bottom - dp(5));
-                c.drawRoundRect(tmp, dp(6), dp(6), fill);
-                text.setColor(theme.accentText);
+                c.drawRoundRect(tmp, dp(7), dp(7), fill);
+                text.setColor(alpha(theme.accentText, t));
             } else {
-                text.setColor(theme.text);
+                text.setColor(alpha(theme.text, t));
             }
             drawCentered(c, applyCase(alts[i]), l + altCellW / 2, cy);
         }
+        c.restore();
     }
 
-    private void drawGlobe(Canvas c) {
-        if (globeH <= 0) return;
-        boolean pressed = downKey == globeKey && touchKind == KEY;
+    private void drawGlobeStrip(Canvas c) {
+        if (m.globeH <= 0) return;
         float cx = globeKey.rect.centerX();
-        float cy = globeTop + globeH * 0.45f;
-        float r = dp(10.5f);
-        if (pressed) {
-            fill.setColor(theme.highlight);
+        float cy = globeTop + m.globeH * 0.45f;
+        float r = Math.min(dp(10.5f), m.globeH * 0.27f);
+        float p = globeKey.press;
+        if (p > 0.001f) {
+            fill.setColor(alpha(theme.highlight, p));
             c.drawCircle(cx, cy, r + dp(8), fill);
         }
-        int col = alpha(theme.text, theme.dark ? 0.85f : 0.62f);
+        drawGlobeIcon(c, cx, cy, alpha(theme.text, theme.dark ? 0.85f : 0.62f), r);
+    }
+
+    private void drawGlobeIcon(Canvas c, float cx, float cy, int col, float r) {
         stroke.setColor(col);
         stroke.setStrokeWidth(dp(1.5f));
         c.drawCircle(cx, cy, r, stroke);
@@ -912,6 +1307,32 @@ final class KeyboardView extends View {
         float chord = r * 0.866f;
         c.drawLine(cx - chord, cy - r * 0.5f, cx + chord, cy - r * 0.5f, stroke);
         c.drawLine(cx - chord, cy + r * 0.5f, cx + chord, cy + r * 0.5f, stroke);
+    }
+
+    private void drawClipboardIcon(Canvas c, float cx, float cy, int col) {
+        float w = dp(13), h = dp(17);
+        stroke.setColor(col);
+        stroke.setStrokeWidth(dp(1.6f));
+        tmp.set(cx - w / 2, cy - h / 2 + dp(1.5f), cx + w / 2, cy + h / 2 + dp(1.5f));
+        c.drawRoundRect(tmp, dp(2.5f), dp(2.5f), stroke);
+        fill.setColor(col);
+        tmp.set(cx - dp(3.5f), cy - h / 2 - dp(0.5f), cx + dp(3.5f), cy - h / 2 + dp(3f));
+        c.drawRoundRect(tmp, dp(1.2f), dp(1.2f), fill);
+        c.drawLine(cx - dp(3.2f), cy + dp(1.5f), cx + dp(3.2f), cy + dp(1.5f), stroke);
+        c.drawLine(cx - dp(3.2f), cy + dp(5f), cx + dp(1.5f), cy + dp(5f), stroke);
+    }
+
+    private void drawSlidersIcon(Canvas c, float cx, float cy, int col) {
+        stroke.setColor(col);
+        stroke.setStrokeWidth(dp(1.6f));
+        fill.setColor(col);
+        float w = dp(8.5f);
+        float[] ys = {cy - dp(5.5f), cy, cy + dp(5.5f)};
+        float[] knobs = {cx + dp(3), cx - dp(3.5f), cx + dp(1)};
+        for (int i = 0; i < 3; i++) {
+            c.drawLine(cx - w, ys[i], cx + w, ys[i], stroke);
+            c.drawCircle(knobs[i], ys[i], dp(2.6f), fill);
+        }
     }
 
     private void drawShift(Canvas c, float cx, float cy, int color, int state) {
@@ -940,7 +1361,7 @@ final class KeyboardView extends View {
         }
     }
 
-    private void drawDelete(Canvas c, float cx, float cy, int color, boolean pressed) {
+    private void drawDelete(Canvas c, float cx, float cy, int color) {
         float h = dp(8.5f), body = dp(15), tip = dp(7.5f), rr = dp(2.5f);
         float x0 = cx - (body + tip) / 2, x1 = x0 + tip, x2 = x1 + body;
         path.reset();
@@ -952,17 +1373,10 @@ final class KeyboardView extends View {
         path.quadTo(x2, cy + h, x2 - rr, cy + h);
         path.lineTo(x1, cy + h);
         path.close();
-        float xc = x1 + body / 2 - dp(0.5f), xs = dp(3.3f);
-        if (pressed) {
-            fill.setColor(color);
-            c.drawPath(path, fill);
-            stroke.setColor(theme.key); // the cross is cut out of the filled icon
-        } else {
-            stroke.setColor(color);
-            stroke.setStrokeWidth(dp(1.6f));
-            c.drawPath(path, stroke);
-        }
+        stroke.setColor(color);
         stroke.setStrokeWidth(dp(1.6f));
+        c.drawPath(path, stroke);
+        float xc = x1 + body / 2 - dp(0.5f), xs = dp(3.3f);
         c.drawLine(xc - xs, cy - xs, xc + xs, cy + xs, stroke);
         c.drawLine(xc - xs, cy + xs, xc + xs, cy - xs, stroke);
     }
@@ -983,7 +1397,5 @@ final class KeyboardView extends View {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         handler.removeCallbacksAndMessages(null);
-        if (flashAnim != null) flashAnim.cancel();
-        if (labelAnim != null) labelAnim.cancel();
     }
 }

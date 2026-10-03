@@ -3,9 +3,11 @@ package com.iphonekb;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
@@ -14,7 +16,7 @@ import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.animation.DecelerateInterpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.OverScroller;
 
 /**
@@ -89,9 +91,34 @@ final class EmojiView extends View {
         return v * density;
     }
 
+    private LinearGradient panelShader;
+    private int shaderH;
+
+    /** iOS-like ease-out curves for opening and closing. */
+    static final PathInterpolator EASE_OUT = new PathInterpolator(0.2f, 0.9f, 0.1f, 1f);
+    static final PathInterpolator EASE_IN = new PathInterpolator(0.4f, 0f, 0.9f, 0.5f);
+
     void setTheme(Theme t) {
         theme = t;
+        panelShader = null;
         invalidate();
+    }
+
+    private void drawBackground(Canvas c) {
+        if (!theme.glass) {
+            c.drawColor(theme.bg);
+            return;
+        }
+        if (panelShader == null || shaderH != getHeight()) {
+            shaderH = getHeight();
+            panelShader = new LinearGradient(0, 0, 0, Math.max(1, shaderH),
+                    theme.bgTop | 0xFF000000, theme.bgBottom | 0xFF000000, Shader.TileMode.CLAMP);
+        }
+        fill.setShader(panelShader);
+        c.drawRect(0, 0, getWidth(), getHeight(), fill);
+        fill.setShader(null);
+        fill.setColor(theme.dark ? 0x26FFFFFF : 0xB3FFFFFF);
+        c.drawRect(0, 0, getWidth(), Math.max(1f, dp(0.6f)), fill);
     }
 
     void setAbcLabel(String s) {
@@ -112,16 +139,18 @@ final class EmojiView extends View {
         animate().cancel();
         setVisibility(VISIBLE);
         setAlpha(0f);
-        setTranslationY(dp(28));
-        animate().alpha(1f).translationY(0f).setDuration(220)
-                .setInterpolator(new DecelerateInterpolator()).start();
+        setTranslationY(dp(36));
+        setScaleX(0.97f);
+        setScaleY(0.97f);
+        animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(320)
+                .setInterpolator(EASE_OUT).start();
     }
 
     void hide() {
         if (getVisibility() != VISIBLE) return;
         animate().cancel();
-        animate().alpha(0f).translationY(dp(28)).setDuration(170)
-                .setInterpolator(new DecelerateInterpolator())
+        animate().alpha(0f).translationY(dp(36)).scaleX(0.97f).scaleY(0.97f).setDuration(200)
+                .setInterpolator(EASE_IN)
                 .withEndAction(new Runnable() {
                     @Override
                     public void run() {
@@ -135,6 +164,8 @@ final class EmojiView extends View {
         setVisibility(GONE);
         setAlpha(1f);
         setTranslationY(0f);
+        setScaleX(1f);
+        setScaleY(1f);
         handler.removeCallbacks(repeatDelete);
         pressBar = BAR_NONE;
     }
@@ -190,7 +221,7 @@ final class EmojiView extends View {
 
     @Override
     protected void onDraw(Canvas c) {
-        c.drawColor(theme.bg);
+        drawBackground(c);
         int W = getWidth();
         if (secX.length != items.length) relayout();
 

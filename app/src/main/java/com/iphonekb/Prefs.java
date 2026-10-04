@@ -69,6 +69,11 @@ final class Prefs {
 
     // typing
     boolean autoCap, doubleSpace, suggestions, trackpad;
+    boolean autocorrect;    // fix typos on space, like iPhone
+    boolean predict;        // suggest the next word after a space
+    String yandexKey, yandexFolder;
+    /** Dictionary edits made in settings, applied by the keyboard (one word per line). */
+    String dictRemove, dictAdd;
     int dictGeneration;
 
     // space-bar hold and translator
@@ -144,6 +149,12 @@ final class Prefs {
         suggestions = sp.getBoolean("suggestions", true);
         trackpad = sp.getBoolean("trackpad", true);
         dictGeneration = sp.getInt("dict_gen", 0);
+        autocorrect = sp.getBoolean("autocorrect", true);
+        predict = sp.getBoolean("predict", true);
+        yandexKey = sp.getString("yandex_key", "");
+        yandexFolder = sp.getString("yandex_folder", "");
+        dictRemove = sp.getString("dict_remove", "");
+        dictAdd = sp.getString("dict_add", "");
 
         spaceHold = sp.getString("space_hold", HOLD_TRANSLATE);
         spaceSwipe = sp.getString("space_swipe", SWIPE_CURSOR);

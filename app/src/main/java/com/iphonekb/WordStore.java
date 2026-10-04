@@ -22,7 +22,9 @@ import java.util.Map;
  * (backup is off in the manifest), never sent anywhere.
  */
 final class WordStore {
-    private static final int MAX = 6000, KEEP = 5000;
+    private static final int MAX = 15000, KEEP = 12000;
+    /** Separates the two words of a remembered word pair (for next-word prediction). */
+    private static final char PAIR = '\u0001';
 
     private final File file;
     private final HashMap<String, Integer> counts = new HashMap<>();
@@ -52,6 +54,82 @@ final class WordStore {
         }
     }
 
+    /** Remembers that {@code word} followed {@code prev} (next-word prediction). */
+    void learnPair(String prev, String word, Locale locale) {
+        if (prev == null || prev.isEmpty() || word.isEmpty()) return;
+        load();
+        String k = prev.toLowerCase(locale) + PAIR + word.toLowerCase(locale);
+        Integer c = counts.get(k);
+        counts.put(k, c == null ? 1 : c + 1);
+        dirty = true;
+        if (counts.size() > MAX) prune();
+    }
+
+    /** Words the user most often typed after {@code prev}. */
+    List<String> next(String prev, Locale locale, int max) {
+        load();
+        String p = prev.toLowerCase(locale) + PAIR;
+        ArrayList<Map.Entry<String, Integer>> found = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
+            if (e.getKey().startsWith(p)) found.add(e);
+        }
+        Collections.sort(found, BY_COUNT_DESC);
+        ArrayList<String> out = new ArrayList<>();
+        for (int i = 0; i < found.size() && out.size() < max; i++) {
+            out.add(found.get(i).getKey().substring(p.length()));
+        }
+        return out;
+    }
+
+    /** How often the user typed this word (0 = never). */
+    int count(String lower) {
+        load();
+        Integer c = counts.get(lower);
+        return c == null ? 0 : c;
+    }
+
+    /** The user's own words, typed at least twice or kept on purpose, never get "corrected". */
+    boolean isKnown(String lower) {
+        return count(lower) >= 2;
+    }
+
+    /** The user insisted on this spelling (undid a correction or added it): remember it. */
+    void keep(String word, Locale locale) {
+        load();
+        String w = word.toLowerCase(locale);
+        Integer c = counts.get(w);
+        counts.put(w, Math.max(3, (c == null ? 0 : c) + 2));
+        dirty = true;
+        save();
+    }
+
+    void remove(String word) {
+        load();
+        if (counts.remove(word) != null) {
+            dirty = true;
+            save();
+        }
+    }
+
+    /** Map of word → count used to favour the user's words in corrections. */
+    Map<String, Integer> boostMap() {
+        load();
+        return counts;
+    }
+
+    /** The user's words, most typed first (pairs excluded). */
+    List<String> words(int max) {
+        load();
+        ArrayList<Map.Entry<String, Integer>> all = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : counts.entrySet()) {
+            if (e.getKey().indexOf(PAIR) < 0) all.add(e);
+        }
+        Collections.sort(all, BY_COUNT_DESC);
+        ArrayList<String> out = new ArrayList<>();
+        for (int i = 0; i < all.size() && out.size() < max; i++) out.add(all.get(i).getKey());
+        return out;
+    }
+
     void learn(String word, Locale locale) {
         load();
         String w = word.toLowerCase(locale);
@@ -69,7 +147,7 @@ final class WordStore {
         ArrayList<Map.Entry<String, Integer>> found = new ArrayList<>();
         for (Map.Entry<String, Integer> e : counts.entrySet()) {
             String k = e.getKey();
-            if (k.length() > p.length() && k.startsWith(p)) found.add(e);
+            if (k.length() > p.length() && k.startsWith(p) && k.indexOf(PAIR) < 0) found.add(e);
         }
         Collections.sort(found, BY_COUNT_DESC);
         ArrayList<String> out = new ArrayList<>();

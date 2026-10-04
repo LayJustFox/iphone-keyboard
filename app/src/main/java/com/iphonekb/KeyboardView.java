@@ -299,6 +299,15 @@ final class KeyboardView extends View {
         kick();
     }
 
+    private boolean middleHighlight;
+
+    void setMiddleHighlight(boolean on) {
+        if (middleHighlight != on) {
+            middleHighlight = on;
+            invalidate();
+        }
+    }
+
     /** Latest clipboard text offered for one-tap paste in the toolbar (null = none). */
     void setQuickClip(String s) {
         quickClip = s;
@@ -381,14 +390,43 @@ final class KeyboardView extends View {
         return true;
     }
 
-    private static boolean easeKey(Key k, float dt, float base) {
-        if (k.press == k.pressTarget) return false;
+    private boolean easeKey(Key k, float dt, float base) {
+        boolean sp = springKey(k, dt);
+        if (k.press == k.pressTarget) return sp;
         // Presses light up almost instantly; releases fade out gently.
         float tau = k.pressTarget > k.press ? 14 : 95 * base;
         float f = 1f - (float) Math.exp(-dt / tau);
         k.press += (k.pressTarget - k.press) * f;
         if (Math.abs(k.pressTarget - k.press) < 0.003f) {
             k.press = k.pressTarget;
+            return sp;
+        }
+        return true;
+    }
+
+    /**
+     * Glass keys swell a little under the finger and settle back with a soft, slightly
+     * underdamped spring (like iOS 26), integrated on real frame time.
+     */
+    private boolean springKey(Key k, float dt) {
+        float target = 1f;
+        if (k.pressTarget > 0.5f) {
+            boolean letterWithBubble = k.type == Key.CHAR && prefs.popups;
+            target = letterWithBubble ? 1f : (k.type == Key.SPACE ? 1.03f : 1.08f);
+        }
+        if (k.scale == target && k.scaleV == 0f) return false;
+        float stiffness = 520f, damping = 26f;          // ~0.6 damping ratio: one gentle overshoot
+        float t = Math.min(dt, 34f) / 1000f;
+        int steps = 3;
+        float h = t / steps;
+        for (int i = 0; i < steps; i++) {
+            float acc = stiffness * (target - k.scale) - damping * k.scaleV;
+            k.scaleV += acc * h;
+            k.scale += k.scaleV * h;
+        }
+        if (Math.abs(target - k.scale) < 0.0008f && Math.abs(k.scaleV) < 0.01f) {
+            k.scale = target;
+            k.scaleV = 0f;
             return false;
         }
         return true;
@@ -397,7 +435,11 @@ final class KeyboardView extends View {
     private void snapAll() {
         Anim[] all = {caseT, labelsT, flashT, bubbleT, altsT, layoutT, accentT, shiftT, lockT, stripT, menuT};
         for (Anim a : all) a.v = a.target;
-        if (layout != null) for (Key[] row : layout.rows) for (Key k : row) k.press = k.pressTarget;
+        if (layout != null) for (Key[] row : layout.rows) for (Key k : row) {
+            k.press = k.pressTarget;
+            k.scale = 1f;
+            k.scaleV = 0f;
+        }
         globeKey.press = globeKey.pressTarget;
     }
 
@@ -1228,6 +1270,11 @@ final class KeyboardView extends View {
                 fill.setColor(theme.highlight);
                 tmp.set(i * cw + dp(3), dp(5), (i + 1) * cw - dp(3), m.stripH - dp(5));
                 c.drawRoundRect(tmp, dp(9), dp(9), fill);
+            } else if (i == 1 && middleHighlight) {
+                // The word space will put in (autocorrection), like the iPhone's highlighted guess.
+                fill.setColor(alpha(theme.dark ? 0x2EFFFFFF : 0xB3FFFFFF, sv));
+                tmp.set(i * cw + dp(6), dp(7), (i + 1) * cw - dp(6), m.stripH - dp(7));
+                c.drawRoundRect(tmp, dp(10), dp(10), fill);
             }
             text.setColor(alpha(theme.text, sv));
             text.setTypeface(i == 1 ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
@@ -1277,7 +1324,16 @@ final class KeyboardView extends View {
         boolean special = k.isSpecial();
         float accent = k.type == Key.RETURN ? accentT.v : 0f;
         float shiftOn = k.type == Key.SHIFT ? shiftT.v : 0f;
+        boolean scaled = Math.abs(k.scale - 1f) > 0.0005f && animOn();
+        if (scaled) {
+            c.save();
+            c.scale(k.scale, k.scale, r.centerX(), r.centerY());
+        }
+        drawKeyBody(c, k, r, p, special, accent, shiftOn);
+        if (scaled) c.restore();
+    }
 
+    private void drawKeyBody(Canvas c, Key k, RectF r, float p, boolean special, float accent, float shiftOn) {
         // Shadow under the key (clipped so it never darkens translucent glass).
         drawShadow(c, r, m.radius);
 

@@ -19,6 +19,8 @@ final class Key {
 
     // Press animation: 0 = idle, 1 = fully pressed. Eased every frame toward pressTarget.
     float press, pressTarget;
+    // Spring-driven size (1 = rest) and its velocity, for the glassy press bounce.
+    float scale = 1f, scaleV;
     // Where the finger touched (for the "liquid" glow).
     float touchX, touchY;
 

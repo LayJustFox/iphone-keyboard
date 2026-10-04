@@ -10,12 +10,8 @@ android {
         applicationId 'com.iphonekb'
         minSdk 26
         targetSdk 34
-        versionCode 9
-        versionName "3.5"
-        // Phones only (no emulator x86 code): keeps the translator's native code small.
-        ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
-        }
+        versionCode 10
+        versionName "4.0"
     }
 
     // The key lives in the repo so every build (GitHub or Android Studio)
@@ -48,10 +44,4 @@ android {
         checkReleaseBuilds false
         abortOnError false
     }
-}
-
-dependencies {
-    // On-device translation and language detection (models are downloaded once, text stays on the phone)
-    implementation 'com.google.mlkit:translate:17.0.3'
-    implementation 'com.google.mlkit:language-id:17.0.6'
 }

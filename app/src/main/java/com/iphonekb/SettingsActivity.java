@@ -284,8 +284,8 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
             }
         });
         footer(col, "Android покажет предупреждение о сборе текста — так он делает для любой "
-                + "сторонней клавиатуры. Вводимый текст никуда не отправляется: интернет нужен "
-                + "только переводчику, чтобы один раз скачать языки.");
+                + "сторонней клавиатуры. Вводимый текст никуда не отправляется. Интернет "
+                + "используется только переводчиком Яндекса, и только для текста, набранного в нём.");
 
         LinearLayout g = group(col, null);
         vStyle = nav(g, 0xFF007AFF, "🎨", "Внешний вид", new Runnable() {
@@ -490,6 +490,8 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         switchRow(g, "Автопрописные", "autocap", prefs.autoCap);
         switchRow(g, "Быстрая клавиша «.»", "double_space", prefs.doubleSpace);
         switchRow(g, "Подсказки слов", "suggestions", prefs.suggestions);
+        switchRow(g, "Автоисправление", "autocorrect", prefs.autocorrect);
+        switchRow(g, "Предсказание следующего слова", "predict", prefs.predict);
         switchRow(g, "Пробел как трекпад", "trackpad", prefs.trackpad);
         footer(col, "Двойной пробел ставит точку и пробел. Удержание пробела превращает "
                 + "клавиатуру в трекпад для курсора.");
@@ -501,6 +503,12 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         LinearLayout lp = group(col, null);
         slider(lp, "Задержка удержания", "long_press", 200, 700, prefs.longPressMs, " мс");
         LinearLayout w = group(col, null);
+        nav(w, 0xFF34C759, "📖", "Мой словарь", new Runnable() {
+            @Override
+            public void run() {
+                push(dictionaryPage(), true);
+            }
+        });
         action(w, "Забыть запомненные слова", 0xFFFF3B30, new Runnable() {
             @Override
             public void run() {
@@ -603,111 +611,49 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         };
         onBackRefresh.run();
 
-        final LinearLayout packs = group(col, "Языковые пакеты");
-        final java.util.HashMap<String, TextView> status = new java.util.HashMap<>();
-        final java.util.HashMap<String, LoadingBar> bars = new java.util.HashMap<>();
-        final java.util.HashSet<String> have = new java.util.HashSet<>();
-        final Runnable[] refresh = new Runnable[1];
-        for (final String[] lang : TranslateEngine.LANGS) {
-            if ("auto".equals(lang[0]) || !LanguagePacks.supported(lang[0])) continue;
-            LinearLayout wrap = new LinearLayout(this);
-            wrap.setOrientation(LinearLayout.VERTICAL);
-            wrap.setPadding(dp(16), dp(11), dp(16), dp(11));
-            LinearLayout top = new LinearLayout(this);
-            top.setOrientation(LinearLayout.HORIZONTAL);
-            top.setGravity(Gravity.CENTER_VERTICAL);
-            top.addView(title(lang[1]), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            TextView st = new TextView(this);
-            st.setTextSize(15);
-            st.setTextColor(secondary());
-            top.addView(st);
-            wrap.addView(top);
-            LoadingBar bar = new LoadingBar(this);
-            bar.setColors(dark ? 0xFF3A3A3C : 0xFFE5E5EA, Theme.isLight(accent()) && !dark ? 0xFF8E8E93 : accent());
-            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
-            bl.setMargins(0, dp(8), 0, 0);
-            wrap.addView(bar, bl);
-            bar.setRunning(false);
-            status.put(lang[0], st);
-            bars.put(lang[0], bar);
-            pressable(wrap, new Runnable() {
-                @Override
-                public void run() {
-                    final String code = lang[0];
-                    if (LanguagePacks.DOWNLOADING.contains(code)) return;
-                    if (have.contains(code)) {
-                        new android.app.AlertDialog.Builder(SettingsActivity.this)
-                                .setTitle("Удалить «" + lang[1] + "»?")
-                                .setMessage("Пакет можно будет скачать снова в любой момент.")
-                                .setNegativeButton("Отмена", null)
-                                .setPositiveButton("Удалить", new android.content.DialogInterface.OnClickListener() {
-                                    @Override
-                                    public void onClick(android.content.DialogInterface d, int w) {
-                                        LanguagePacks.delete(code, new LanguagePacks.Listener() {
-                                            @Override
-                                            public void onDone(boolean ok) {
-                                                if (!ok) Toast.makeText(SettingsActivity.this,
-                                                        "Этот пакет удалить нельзя", Toast.LENGTH_SHORT).show();
-                                                refresh[0].run();
-                                            }
-                                        });
-                                    }
-                                }).show();
-                        return;
-                    }
-                    LanguagePacks.download(code, prefs.translatorWifiOnly, new LanguagePacks.Listener() {
-                        @Override
-                        public void onDone(boolean ok) {
-                            if (!ok) Toast.makeText(SettingsActivity.this, prefs.translatorWifiOnly
-                                    ? "Не скачалось: подключитесь к Wi-Fi"
-                                    : "Не скачалось: проверьте интернет", Toast.LENGTH_SHORT).show();
-                            refresh[0].run();
-                        }
-                    });
-                    refresh[0].run();
-                }
-            });
-            addRow(packs, wrap, 16);
-        }
-        refresh[0] = new Runnable() {
+        LinearLayout y = group(col, "Яндекс Переводчик");
+        final EditText keyField = field(y, "API-ключ Yandex Cloud", prefs.yandexKey, true);
+        final EditText folderField = field(y, "ID каталога (если нужен)", prefs.yandexFolder, false);
+        final TextView check = new TextView(this);
+        check.setTextSize(15);
+        check.setTextColor(secondary());
+        check.setPadding(dp(16), dp(10), dp(16), dp(10));
+        check.setText(prefs.yandexKey.isEmpty() ? "Ключ не задан" : "Ключ сохранён");
+        addRow(y, check, 16);
+        action(y, "Сохранить и проверить", accentInk(), new Runnable() {
             @Override
             public void run() {
-                LanguagePacks.list(new LanguagePacks.ListListener() {
+                final String key = keyField.getText().toString().trim();
+                final String folder = folderField.getText().toString().trim();
+                prefs.setString("yandex_key", key);
+                prefs.setString("yandex_folder", folder);
+                if (key.isEmpty()) {
+                    check.setText("Ключ удалён — переводчик будет открывать Яндекс Переводчик");
+                    return;
+                }
+                check.setText("Проверяю…");
+                new Thread(new Runnable() {
                     @Override
-                    public void onList(java.util.Set<String> downloaded) {
-                        have.clear();
-                        have.addAll(downloaded);
-                        for (java.util.Map.Entry<String, TextView> e : status.entrySet()) {
-                            String code = e.getKey();
-                            TextView st = e.getValue();
-                            boolean busy = LanguagePacks.DOWNLOADING.contains(code);
-                            bars.get(code).setRunning(busy);
-                            if (busy) {
-                                st.setText("Скачивается…");
-                                st.setTextColor(secondary());
-                            } else if (have.contains(code)) {
-                                st.setText("✓ На телефоне");
-                                st.setTextColor(secondary());
-                            } else {
-                                st.setText("Скачать ↓");
-                                st.setTextColor(accentInk());
+                    public void run() {
+                        final String[] r = TranslateEngine.request("Привет", "ru", "en", key, folder);
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                check.setText(r[0] != null ? "✓ Работает: «Привет» → «" + r[0] + "»" : "✕ " + r[2]);
                             }
-                        }
+                        });
                     }
-                });
+                }).start();
             }
-        };
-        refresh[0].run();
-        footer(col, "Нажмите на язык, чтобы скачать его (около 30 МБ) — полоска показывает загрузку. "
-                + "Нажмите на скачанный язык, чтобы удалить его и освободить место. Английский нужен "
-                + "для перевода между любыми языками.");
-
-        LinearLayout g = group(col, null);
-        switchRow(g, "Скачивать только по Wi-Fi", "trans_wifi", prefs.translatorWifiOnly);
-        footer(col, "Удерживайте пробел и печатайте — перевод появляется сразу, «Вставить» или "
-                + "кнопка ввода вставляет его в поле. Перевод выполняется прямо на телефоне (Google "
-                + "ML Kit): текст никуда не отправляется. Интернет нужен только для скачивания языков.");
+        });
+        footer(col, "Как получить ключ: зайдите на console.yandex.cloud → создайте сервисный аккаунт с "
+                + "ролью ai.translate.user → «Создать новый ключ» → «API-ключ», и вставьте его сюда. "
+                + "Yandex Cloud даёт бесплатный пробный период, дальше перевод платный по тарифу Яндекса. "
+                + "Без ключа кнопка «Яндекс ↗» в переводчике открывает текст в приложении или на сайте "
+                + "Яндекс Переводчика.");
+        footer(col, "Удерживайте пробел и печатайте — перевод появляется сразу, «Вставить» или кнопка "
+                + "ввода вставляет его в поле. В Яндекс отправляется только текст, набранный в переводчике, "
+                + "и только пока он открыт. Ключ хранится только на телефоне.");
         return page("Переводчик", col, false);
     }
 
@@ -734,6 +680,68 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
             });
         }
         return page(source ? "С языка" : "На язык", col, false);
+    }
+
+    /** The user's own words: add a word so it's never "corrected", or remove one. */
+    private View dictionaryPage() {
+        LinearLayout col = column();
+        LinearLayout add = group(col, "Добавить слово");
+        final EditText f = field(add, "Например: имя, ник, термин", "", false);
+        final LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        action(add, "Добавить", accentInk(), new Runnable() {
+            @Override
+            public void run() {
+                String w = f.getText().toString().trim();
+                if (w.isEmpty() || w.contains(" ")) return;
+                appendPref("dict_add", w);
+                f.setText("");
+                Toast.makeText(SettingsActivity.this, "«" + w + "» добавлено", Toast.LENGTH_SHORT).show();
+            }
+        });
+        footer(col, "Добавленные слова не исправляются и появляются в подсказках. Слово, которое "
+                + "вы отменили клавишей ⌫ после автоисправления, добавляется само.");
+
+        LinearLayout mine = group(col, "Ваши частые слова");
+        WordStore ws = new WordStore(new java.io.File(getFilesDir(), "words.tsv"));
+        List<String> all = ws.words(300);
+        if (all.isEmpty()) {
+            TextView t = title("Пока пусто — слова появятся, пока вы печатаете");
+            t.setTextColor(secondary());
+            t.setPadding(dp(16), dp(12), dp(16), dp(12));
+            addRow(mine, t, 16);
+        }
+        for (final String w : all) {
+            final LinearLayout row = rowBase();
+            row.addView(title(w), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            TextView del = new TextView(this);
+            del.setText("Удалить");
+            del.setTextSize(15);
+            del.setTextColor(0xFFFF3B30);
+            row.addView(del);
+            pressable(row, new Runnable() {
+                @Override
+                public void run() {
+                    appendPref("dict_remove", w);
+                    row.animate().alpha(0f).setDuration(220).withEndAction(new Runnable() {
+                        @Override
+                        public void run() {
+                            row.setVisibility(View.GONE);
+                        }
+                    }).start();
+                }
+            });
+            addRow(mine, row, 16);
+        }
+        footer(col, "Словарь хранится только на этом телефоне. Встроенные словари: OpenSubtitles / "
+                + "hermitdave FrequencyWords (CC BY-SA 4.0).");
+        return page("Мой словарь", col, false);
+    }
+
+    private void appendPref(String key, String word) {
+        prefs.reload();
+        String cur = "dict_add".equals(key) ? prefs.dictAdd : prefs.dictRemove;
+        prefs.setString(key, cur.isEmpty() ? word : cur + "\n" + word);
     }
 
     private void replaceTop(View page) {
@@ -979,6 +987,23 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         }
     }
 
+    /** Single-line text field row. */
+    private EditText field(LinearLayout box, String hint, String value, boolean secret) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setText(value);
+        e.setTextSize(16);
+        e.setSingleLine(true);
+        e.setTextColor(label());
+        e.setHintTextColor(secondary());
+        e.setBackground(null);
+        e.setPadding(dp(16), dp(12), dp(16), dp(12));
+        e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                | (secret ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD : 0));
+        addRow(box, e, 16);
+        return e;
+    }
+
     /** Text button row in a colour (blue actions, red destructive ones). */
     private void action(LinearLayout box, String text, int color, Runnable onTap) {
         LinearLayout row = rowBase();
@@ -1011,7 +1036,8 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         vSound.setText(h[Math.max(0, Math.min(3, prefs.haptic))]);
         vLangs.setText(String.valueOf(prefs.langs.length));
         vClip.setText(prefs.clipboard ? String.format("%,d", prefs.clipMax).replace(',', ' ') : "Выкл.");
-        vTrans.setText(Prefs.HOLD_TRANSLATE.equals(prefs.spaceHold) ? "Пробел" : "Выкл.");
+        vTrans.setText(!Prefs.HOLD_TRANSLATE.equals(prefs.spaceHold) ? "Выкл."
+                : prefs.yandexKey.isEmpty() ? "Яндекс ↗" : "Яндекс");
     }
 
     private void updateStatus() {

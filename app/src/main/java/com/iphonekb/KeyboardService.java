@@ -88,6 +88,10 @@ public final class KeyboardService extends InputMethodService
     private int jaMode = HIRA;
 
     private final String[] suggestionWords = new String[3];
+    /** Middle suggestion is an autocorrection that space will apply. */
+    private boolean middleIsCorrection;
+    /** Last autocorrection: {typed, corrected, separator} — backspace undoes it. */
+    private String[] lastCorrection;
 
     // clipboard search
     private boolean searching;
@@ -114,7 +118,12 @@ public final class KeyboardService extends InputMethodService
                 @Override
                 public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
                     if (key == null || key.equals("current") || key.equals("recent_emoji")
-                            || key.startsWith("trans_")) return;
+                            || key.startsWith("trans_") || key.startsWith("yandex_")) return;
+                    if (key.startsWith("dict_")) {
+                        prefs.reload();
+                        applyDictEdits();
+                        return;
+                    }
                     prefs.reload();
                     if (kv == null) return;
                     kv.applyPrefs(prefs);
@@ -209,10 +218,26 @@ public final class KeyboardService extends InputMethodService
         return false;
     }
 
+    /** Landscape: never show Android's white full-screen text line above the keys. */
+    @Override
+    public void onUpdateExtractingVisibility(EditorInfo ei) {
+        setExtractViewShown(false);
+    }
+
+    @Override
+    public View onCreateExtractTextView() {
+        View v = new View(this);
+        v.setVisibility(View.GONE);
+        return v;
+    }
+
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
         prefs.reload();
+        applyDictEdits();
+        setExtractViewShown(false);
+        for (String l : prefs.langs) if (!"ja".equals(l)) Dictionary.get(getAssets(), l); // preload
         if (prefs.dictGeneration != dictGeneration) {
             dictGeneration = prefs.dictGeneration;
             words.clear();
@@ -550,8 +575,17 @@ public final class KeyboardService extends InputMethodService
             return;
         }
         if (romaji.length() > 0) commitComposition(ic);
-        if (!isWordChar(s)) learnCurrentWord(ic);
-        ic.commitText(s, 1);
+        if (!isWordChar(s)) {
+            // Punctuation ends a word: fix a typo first (like iPhone), then type the mark.
+            if (!applyCorrection(ic, s)) {
+                learnCurrentWord(ic);
+                ic.commitText(s, 1);
+                lastCorrection = null;
+            }
+        } else {
+            lastCorrection = null;
+            ic.commitText(s, 1);
+        }
         afterChar();
     }
 
@@ -622,8 +656,11 @@ public final class KeyboardService extends InputMethodService
                 return;
             }
         }
-        learnCurrentWord(ic);
-        ic.commitText(" ", 1);
+        if (!applyCorrection(ic, " ")) {
+            learnCurrentWord(ic);
+            ic.commitText(" ", 1);
+            lastCorrection = null;
+        }
         afterChar();
         lastWasSpace = true;
     }
@@ -647,6 +684,7 @@ public final class KeyboardService extends InputMethodService
         }
         learnCurrentWord(ic);
         lastWasSpace = false;
+        lastCorrection = null;
         // Performs the field's action (search, send…) or types a new line.
         sendKeyChar('\n');
     }
@@ -687,6 +725,22 @@ public final class KeyboardService extends InputMethodService
             ic.commitText("", 1);
             selEnd = selStart;
             return;
+        }
+        if (lastCorrection != null && !word) {
+            // Backspace right after an autocorrection brings back what you typed, and the
+            // keyboard remembers that word so it won't "fix" it again.
+            String fixed = lastCorrection[1] + lastCorrection[2];
+            CharSequence b = ic.getTextBeforeCursor(fixed.length(), 0);
+            String original = lastCorrection[0];
+            lastCorrection = null;
+            if (b != null && b.toString().equals(fixed)) {
+                ic.beginBatchEdit();
+                ic.deleteSurroundingText(fixed.length(), 0);
+                ic.commitText(original, 1);
+                ic.endBatchEdit();
+                if (learn) words.keep(original, locale());
+                return;
+            }
         }
         if (word) {
             int n = wordDeleteLength(ic.getTextBeforeCursor(64, 0));
@@ -1115,7 +1169,7 @@ public final class KeyboardService extends InputMethodService
         String src = prefs.transSrc;
         String dst = prefs.transDst;
         if (dst.equals(src)) dst = "en".equals(dst) ? "ru" : "en";
-        engine.translate(req, transText(), src, dst, lang, prefs.translatorWifiOnly, new TranslateEngine.Callback() {
+        engine.translate(req, transText(), src, dst, prefs.yandexKey, prefs.yandexFolder, new TranslateEngine.Callback() {
             @Override
             public void onTranslated(int r, String detected, String text) {
                 if (r == transReq && translating) tv.setResult(text, detected);
@@ -1139,6 +1193,18 @@ public final class KeyboardService extends InputMethodService
         transInput.setLength(0);
         tv.reset();
         tv.setLanguages(prefs.transSrc, prefs.transDst);
+    }
+
+    @Override
+    public void onTransOpenYandex() {
+        String t = transText();
+        if (t.trim().isEmpty()) return;
+        String dst = prefs.transDst;
+        try {
+            startActivity(TranslateEngine.openInYandex(this, t, prefs.transSrc, dst));
+        } catch (RuntimeException ignored) {
+        }
+        closeTranslator();
     }
 
     @Override
@@ -1179,6 +1245,81 @@ public final class KeyboardService extends InputMethodService
 
     // ---------------------------------------------------------------- suggestions
 
+    // ---------------------------------------------------------------- dictionary & autocorrect
+
+    /** Built-in word list for the current language (null for Japanese). */
+    private Dictionary dict() {
+        if (isJa()) return null;
+        return Dictionary.get(getAssets(), lang);
+    }
+
+    /** Words added or removed in Settings → Словарь. */
+    private void applyDictEdits() {
+        if (!prefs.dictAdd.isEmpty()) {
+            for (String w : prefs.dictAdd.split("\n")) if (!w.trim().isEmpty()) words.keep(w.trim(), locale());
+            prefs.putQuiet("dict_add", "");
+        }
+        if (!prefs.dictRemove.isEmpty()) {
+            for (String w : prefs.dictRemove.split("\n")) if (!w.trim().isEmpty()) words.remove(w.trim());
+            prefs.putQuiet("dict_remove", "");
+        }
+        prefs.reload();
+    }
+
+    private static boolean hasDigit(String w) {
+        for (int i = 0; i < w.length(); i++) if (Character.isDigit(w.charAt(i))) return true;
+        return false;
+    }
+
+    /** Correction for the word being typed, or null (word known, too short, setting off…). */
+    private String correctionFor(String w) {
+        if (!prefs.autocorrect || !learn || w.length() < 2 || hasDigit(w)) return null;
+        Dictionary d = dict();
+        if (d == null || !d.isLoaded()) return null;
+        String low = w.toLowerCase(locale());
+        if (words.isKnown(low)) return null;
+        if (low.length() <= 3 && words.count(low) > 0) return null; // short words you've typed before
+        // ALL-CAPS words are usually names / abbreviations: leave them alone.
+        if (w.length() > 1 && w.equals(w.toUpperCase(locale()))) return null;
+        String c = d.correct(low, words.boostMap());
+        return c == null || c.equals(low) ? null : matchCase(c, w);
+    }
+
+    /**
+     * Space or punctuation ends a word: replace a typo with its correction, like iPhone.
+     * @return true if the word was corrected (and {@code sep} already typed)
+     */
+    private boolean applyCorrection(InputConnection ic, String sep) {
+        String w = currentWord(ic);
+        if (!w.isEmpty() && Character.isUpperCase(w.charAt(0)) && !sentenceStartBefore(ic, w.length())) {
+            return false; // a capitalised word mid-sentence is probably a name
+        }
+        String fixed = correctionFor(w);
+        if (fixed == null) return false;
+        String prev = previousWord(ic, w.length());
+        ic.beginBatchEdit();
+        ic.deleteSurroundingText(w.length(), 0);
+        ic.commitText(fixed + sep, 1);
+        ic.endBatchEdit();
+        lastCorrection = new String[]{w, fixed, sep};
+        if (learn) {
+            words.learn(fixed, locale());
+            words.learnPair(prev, fixed, locale());
+        }
+        return true;
+    }
+
+    private boolean sentenceStartBefore(InputConnection ic, int wordLen) {
+        CharSequence b = ic.getTextBeforeCursor(wordLen + 40, 0);
+        if (b == null) return true;
+        int i = b.length() - wordLen;
+        while (i > 0 && Character.isWhitespace(b.charAt(i - 1))) i--;
+        if (i <= 0) return true;
+        char c = b.charAt(i - 1);
+        return c == '.' || c == '!' || c == '?' || c == '\n' || c == '…';
+    }
+
+    /** Letters right before the cursor. */
     /** Letters right before the cursor. */
     private String currentWord(InputConnection ic) {
         CharSequence b = ic.getTextBeforeCursor(48, 0);
@@ -1197,13 +1338,32 @@ public final class KeyboardService extends InputMethodService
     private void learnCurrentWord(InputConnection ic) {
         if (!learn) return;
         String w = currentWord(ic);
-        if (w.length() >= 2 && w.length() <= 30) words.learn(w, locale());
+        if (w.isEmpty() || w.length() > 30) return;
+        if (w.length() >= 2) words.learn(w, locale());
+        words.learnPair(previousWord(ic, w.length()), w, locale());
+    }
+
+    /** The word before the current one (only if just spaces separate them). */
+    private String previousWord(InputConnection ic, int currentLen) {
+        CharSequence b = ic.getTextBeforeCursor(80, 0);
+        if (b == null) return null;
+        int i = b.length() - currentLen;
+        int spaces = 0;
+        while (i > 0 && b.charAt(i - 1) == ' ') {
+            i--;
+            spaces++;
+        }
+        if (spaces == 0 && currentLen > 0) return null;
+        int end = i;
+        while (i > 0 && Character.isLetter(b.charAt(i - 1))) i--;
+        return end > i ? b.subSequence(i, end).toString() : null;
     }
 
     private void updateSuggestions() {
         if (kv == null) return;
         String[] shown = new String[3];
         for (int i = 0; i < 3; i++) suggestionWords[i] = null;
+        middleIsCorrection = false;
         InputConnection ic = getCurrentInputConnection();
         if (searching || translating) {
             kv.setSuggestions(shown);
@@ -1217,18 +1377,81 @@ public final class KeyboardService extends InputMethodService
         } else if (showSuggestions && ic != null && (selStart < 0 || selStart == selEnd)) {
             String p = currentWord(ic);
             if (!p.isEmpty()) {
-                List<String> s = words.suggest(p, locale(), 2);
-                if (!s.isEmpty()) {
-                    suggestionWords[0] = p;
-                    suggestionWords[1] = matchCase(s.get(0), p);
-                    if (s.size() > 1) suggestionWords[2] = matchCase(s.get(1), p);
-                }
+                fillCompletions(p);
+            } else if (prefs.predict) {
+                fillPredictions(ic);
             }
         }
         for (int i = 0; i < 3; i++) shown[i] = suggestionWords[i];
-        if (romaji.length() == 0 && shown[0] != null) shown[0] = "«" + shown[0] + "»";
+        if (romaji.length() == 0 && shown[0] != null && suggestionWords[1] != null && currentWordNotEmpty(ic)) {
+            shown[0] = "«" + shown[0] + "»";
+        }
         kv.setSuggestions(shown);
+        kv.setMiddleHighlight(middleIsCorrection);
         updateQuickClip();
+    }
+
+    private boolean currentWordNotEmpty(InputConnection ic) {
+        return ic != null && !currentWord(ic).isEmpty();
+    }
+
+    /** While typing: «as typed» | correction or best completion | next completion. */
+    private void fillCompletions(String p) {
+        Locale loc = locale();
+        String low = p.toLowerCase(loc);
+        java.util.LinkedHashSet<String> cands = new java.util.LinkedHashSet<>();
+        String fix = correctionFor(p);
+        if (fix != null) {
+            cands.add(fix.toLowerCase(loc));
+            middleIsCorrection = true;
+        }
+        for (String w : words.suggest(p, loc, 3)) cands.add(w);
+        Dictionary d = dict();
+        if (d != null) for (String w : d.complete(low, 4)) cands.add(w);
+        cands.remove(low);
+        if (cands.isEmpty()) return;
+        suggestionWords[0] = p;
+        int i = 1;
+        for (String w : cands) {
+            if (i > 2) break;
+            suggestionWords[i++] = matchCase(w, p);
+        }
+    }
+
+    /** After a space: words that usually come next. */
+    private void fillPredictions(InputConnection ic) {
+        String prev = previousWord(ic, 0);
+        java.util.LinkedHashSet<String> cands = new java.util.LinkedHashSet<>();
+        if (prev != null) cands.addAll(words.next(prev, locale(), 3));
+        if (cands.size() < 3) {
+            CharSequence b = ic.getTextBeforeCursor(3, 0);
+            boolean sentenceStart = b == null || b.length() == 0
+                    || b.toString().trim().isEmpty() || b.toString().trim().matches(".*[.!?]$");
+            if (sentenceStart || prev != null) {
+                String[] common;
+                switch (lang) {
+                    case "ru": common = prev == null ? new String[]{"Я", "Привет", "Да"} : new String[]{"и", "не", "в"}; break;
+                    case "tr": common = prev == null ? new String[]{"Merhaba", "Ben", "Evet"} : new String[]{"ve", "bir", "bu"}; break;
+                    case "ja": common = new String[0]; break;
+                    default: common = prev == null ? new String[]{"I", "The", "Hi"} : new String[]{"the", "to", "and"}; break;
+                }
+                for (String c : common) {
+                    if (cands.size() >= 3) break;
+                    cands.add(c);
+                }
+            }
+        }
+        // iPhone order: best guess in the middle.
+        String[] arr = cands.toArray(new String[0]);
+        if (arr.length > 0) suggestionWords[1] = arr[0];
+        if (arr.length > 1) suggestionWords[0] = arr[1];
+        if (arr.length > 2) suggestionWords[2] = arr[2];
+        if (shift == KeyboardView.SHIFT_ON) {
+            for (int i = 0; i < 3; i++) {
+                String w = suggestionWords[i];
+                if (w != null && !w.isEmpty()) suggestionWords[i] = w.substring(0, 1).toUpperCase(locale()) + w.substring(1);
+            }
+        }
     }
 
     private String matchCase(String w, String prefix) {
@@ -1254,11 +1477,18 @@ public final class KeyboardService extends InputMethodService
             return;
         }
         String prefix = currentWord(ic);
+        String prev = previousWord(ic, prefix.length());
         ic.beginBatchEdit();
         if (!prefix.isEmpty()) ic.deleteSurroundingText(prefix.length(), 0);
         ic.commitText(w + " ", 1);
         ic.endBatchEdit();
-        if (learn) words.learn(w, locale());
+        lastCorrection = null;
+        if (learn) {
+            // Picking the word exactly as typed («…») tells the keyboard it is a real word.
+            if (index == 0 && !prefix.isEmpty()) words.keep(w, locale());
+            else words.learn(w, locale());
+            words.learnPair(prev, w, locale());
+        }
         afterChar();
         lastWasSpace = true;
     }

@@ -118,7 +118,7 @@ public final class KeyboardService extends InputMethodService
                 @Override
                 public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
                     if (key == null || key.equals("current") || key.equals("recent_emoji")
-                            || key.startsWith("trans_") || key.startsWith("yandex_")) return;
+                            || key.startsWith("trans_")) return;
                     if (key.startsWith("dict_")) {
                         prefs.reload();
                         applyDictEdits();
@@ -1169,7 +1169,7 @@ public final class KeyboardService extends InputMethodService
         String src = prefs.transSrc;
         String dst = prefs.transDst;
         if (dst.equals(src)) dst = "en".equals(dst) ? "ru" : "en";
-        engine.translate(req, transText(), src, dst, prefs.yandexKey, prefs.yandexFolder, new TranslateEngine.Callback() {
+        engine.translate(req, transText(), src, dst, lang, prefs.transEmail, new TranslateEngine.Callback() {
             @Override
             public void onTranslated(int r, String detected, String text) {
                 if (r == transReq && translating) tv.setResult(text, detected);
@@ -1193,18 +1193,6 @@ public final class KeyboardService extends InputMethodService
         transInput.setLength(0);
         tv.reset();
         tv.setLanguages(prefs.transSrc, prefs.transDst);
-    }
-
-    @Override
-    public void onTransOpenYandex() {
-        String t = transText();
-        if (t.trim().isEmpty()) return;
-        String dst = prefs.transDst;
-        try {
-            startActivity(TranslateEngine.openInYandex(this, t, prefs.transSrc, dst));
-        } catch (RuntimeException ignored) {
-        }
-        closeTranslator();
     }
 
     @Override

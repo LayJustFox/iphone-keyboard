@@ -285,7 +285,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         });
         footer(col, "Android покажет предупреждение о сборе текста — так он делает для любой "
                 + "сторонней клавиатуры. Вводимый текст никуда не отправляется. Интернет "
-                + "используется только переводчиком Яндекса, и только для текста, набранного в нём.");
+                + "используется только переводчиком, и только для текста, набранного в нём.");
 
         LinearLayout g = group(col, null);
         vStyle = nav(g, 0xFF007AFF, "🎨", "Внешний вид", new Runnable() {
@@ -611,49 +611,45 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         };
         onBackRefresh.run();
 
-        LinearLayout y = group(col, "Яндекс Переводчик");
-        final EditText keyField = field(y, "API-ключ Yandex Cloud", prefs.yandexKey, true);
-        final EditText folderField = field(y, "ID каталога (если нужен)", prefs.yandexFolder, false);
+        LinearLayout y = group(col, "Переводчик MyMemory");
+        TextView info = title("Работает сразу, без ключей и регистрации");
+        info.setPadding(dp(16), dp(12), dp(16), dp(12));
+        addRow(y, info, 16);
+        final EditText mail = field(y, "E-mail (необязательно)", prefs.transEmail, false);
+        mail.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
         final TextView check = new TextView(this);
         check.setTextSize(15);
         check.setTextColor(secondary());
         check.setPadding(dp(16), dp(10), dp(16), dp(10));
-        check.setText(prefs.yandexKey.isEmpty() ? "Ключ не задан" : "Ключ сохранён");
+        check.setText(prefs.transEmail.isEmpty() ? "Лимит: 5 000 символов в день" : "Лимит: 50 000 символов в день");
         addRow(y, check, 16);
         action(y, "Сохранить и проверить", accentInk(), new Runnable() {
             @Override
             public void run() {
-                final String key = keyField.getText().toString().trim();
-                final String folder = folderField.getText().toString().trim();
-                prefs.setString("yandex_key", key);
-                prefs.setString("yandex_folder", folder);
-                if (key.isEmpty()) {
-                    check.setText("Ключ удалён — переводчик будет открывать Яндекс Переводчик");
-                    return;
-                }
+                final String email = mail.getText().toString().trim();
+                prefs.setString("trans_email", email);
                 check.setText("Проверяю…");
                 new Thread(new Runnable() {
                     @Override
                     public void run() {
-                        final String[] r = TranslateEngine.request("Привет", "ru", "en", key, folder);
+                        final String[] r = TranslateEngine.request("Привет, как дела?", "ru", "en", email);
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                check.setText(r[0] != null ? "✓ Работает: «Привет» → «" + r[0] + "»" : "✕ " + r[2]);
+                                check.setText(r[0] != null
+                                        ? "✓ Работает: «Привет, как дела?» → «" + r[0] + "»"
+                                        : "✕ " + r[1]);
                             }
                         });
                     }
                 }).start();
             }
         });
-        footer(col, "Как получить ключ: зайдите на console.yandex.cloud → создайте сервисный аккаунт с "
-                + "ролью ai.translate.user → «Создать новый ключ» → «API-ключ», и вставьте его сюда. "
-                + "Yandex Cloud даёт бесплатный пробный период, дальше перевод платный по тарифу Яндекса. "
-                + "Без ключа кнопка «Яндекс ↗» в переводчике открывает текст в приложении или на сайте "
-                + "Яндекс Переводчика.");
-        footer(col, "Удерживайте пробел и печатайте — перевод появляется сразу, «Вставить» или кнопка "
-                + "ввода вставляет его в поле. В Яндекс отправляется только текст, набранный в переводчике, "
-                + "и только пока он открыт. Ключ хранится только на телефоне.");
+        footer(col, "Перевод бесплатный, без ключа: 5 000 символов в день, а с e-mail — 50 000 "
+                + "(e-mail передаётся только MyMemory, чтобы считать лимит, без регистрации). "
+                + "Удерживайте пробел и печатайте — перевод появится, «Вставить» или кнопка ввода "
+                + "вставит его в поле. В интернет уходит только текст, набранный в переводчике, и "
+                + "только пока он открыт (сервис MyMemory, Translated srl, Италия).");
         return page("Переводчик", col, false);
     }
 
@@ -1036,8 +1032,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         vSound.setText(h[Math.max(0, Math.min(3, prefs.haptic))]);
         vLangs.setText(String.valueOf(prefs.langs.length));
         vClip.setText(prefs.clipboard ? String.format("%,d", prefs.clipMax).replace(',', ' ') : "Выкл.");
-        vTrans.setText(!Prefs.HOLD_TRANSLATE.equals(prefs.spaceHold) ? "Выкл."
-                : prefs.yandexKey.isEmpty() ? "Яндекс ↗" : "Яндекс");
+        vTrans.setText(Prefs.HOLD_TRANSLATE.equals(prefs.spaceHold) ? "Пробел" : "Выкл.");
     }
 
     private void updateStatus() {

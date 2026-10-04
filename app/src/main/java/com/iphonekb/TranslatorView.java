@@ -29,14 +29,13 @@ final class TranslatorView extends View {
     interface Listener {
         void onTransClose();
         void onTransInsert();
-        void onTransOpenYandex();
         void onTransSwap();
         void onTransLang(boolean source, String code);
         void onFeedback(int keyType);
     }
 
     private static final int T_NONE = 0, T_SRC = 1, T_SWAP = 2, T_DST = 3, T_CLOSE = 4, T_INSERT = 5,
-            T_RESULT = 6, T_PICK = 7, T_YANDEX = 8;
+            T_RESULT = 6, T_PICK = 7;
 
     private final Listener listener;
     private final float d;
@@ -45,7 +44,6 @@ final class TranslatorView extends View {
     private String src = "auto", dst = "en", detected;
     private String input = "", result = "", status;
     private boolean busy;
-    private boolean yandexMode;
     private boolean picking, pickingSource;
     private float pickScroll, pickMax;
 
@@ -229,18 +227,15 @@ final class TranslatorView extends View {
         // Result
         float rt = inputBottom() + dp(8);
         boolean hasResult = !result.isEmpty();
-        yandexMode = !hasResult && !input.trim().isEmpty() && !busy;
-        float insertW = hasResult ? dp(96) : (yandexMode ? dp(104) : 0);
-        if (hasResult || yandexMode) {
+        float insertW = hasResult ? dp(96) : 0;
+        if (hasResult) {
             insertBtn.set(W - insertW - dp(8), rt + dp(4), W - dp(8), rt + dp(38));
-            boolean down = pressed == T_INSERT || pressed == T_YANDEX;
-            int bg = yandexMode ? 0xFFFC3F1D : theme.accent;       // Yandex red for "open in Yandex"
-            fill.setColor(down ? blend(bg) : bg);
+            fill.setColor(pressed == T_INSERT ? blend(theme.accent) : theme.accent);
             c.drawRoundRect(insertBtn, insertBtn.height() / 2, insertBtn.height() / 2, fill);
             tp.setTextSize(dp(15));
-            tp.setColor(yandexMode ? 0xFFFFFFFF : theme.accentText);
+            tp.setColor(theme.accentText);
             tp.setTextAlign(Paint.Align.CENTER);
-            c.drawText(yandexMode ? "Яндекс ↗" : "Вставить", insertBtn.centerX(),
+            c.drawText("Вставить", insertBtn.centerX(),
                     insertBtn.centerY() - (tp.descent() + tp.ascent()) / 2, tp);
             tp.setTextAlign(Paint.Align.LEFT);
         } else {
@@ -272,7 +267,7 @@ final class TranslatorView extends View {
         resultLayout.draw(c);
         c.restore();
         if (status != null && busy) {
-            // Waiting for Yandex: a gliding activity bar.
+            // Waiting for the translation: a gliding activity bar.
             float by = rt + dp(6) + resultLayout.getHeight() + dp(10);
             float bw = W - dp(32);
             float bh = dp(4);
@@ -361,7 +356,7 @@ final class TranslatorView extends View {
         if (swapBtn.contains(x, y)) return T_SWAP;
         if (closeBtn.contains(x, y) || (y < headerH() && x > closeBtn.left - dp(6))) return T_CLOSE;
         if (picking) return y > headerH() ? T_PICK : T_NONE;
-        if (!insertBtn.isEmpty() && insertBtn.contains(x, y)) return yandexMode ? T_YANDEX : T_INSERT;
+        if (!insertBtn.isEmpty() && insertBtn.contains(x, y)) return T_INSERT;
         if (y > inputBottom() && !result.isEmpty()) return T_RESULT;
         return T_NONE;
     }
@@ -421,9 +416,6 @@ final class TranslatorView extends View {
                     case T_INSERT:
                     case T_RESULT:
                         listener.onTransInsert();
-                        break;
-                    case T_YANDEX:
-                        listener.onTransOpenYandex();
                         break;
                     case T_PICK:
                         if (!dragging && pp >= 0 && pp == pickAt(x, y)) {

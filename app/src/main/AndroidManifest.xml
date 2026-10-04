@@ -2,8 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.VIBRATE" />
-    <!-- Used only by the translator (Yandex Cloud Translate, with the user's own key), and only
-         for text typed into the translator while it is open. No analytics, no other connections. -->
+    <!-- Used only by the translator (MyMemory, no key), and only for text typed into the
+         translator while it is open. No analytics, no other connections. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application

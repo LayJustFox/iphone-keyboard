@@ -120,17 +120,12 @@ final class Layouts {
     }
 
     private static Layout symbols(String lang, boolean second, boolean globeInRow) {
-        String cur;
-        String others;
-        switch (lang) {
-            case "ru": cur = "₽"; others = "$€£"; break;
-            case "tr": cur = "₺"; others = "$€£"; break;
-            case "ja": cur = "¥"; others = "$€£"; break;
-            default: cur = "$"; others = "€£¥"; break;
-        }
-        String r1 = second ? "[]{}#%^*+=" : "1234567890";
-        String r2 = second ? "_\\|~<>" + others + "•" : "-/:;()" + cur + "&@\"";
-        String r3 = "ja".equals(lang) ? "。、？！ー" : ".,?!'";
+        // Both symbol pages keep the digits on top.
+        //   123:  * % { } [ ] ( ) = /      then  @ - + ! ?
+        //   #+=:  ^ √ % _ " ' < > ≈ ≠      then  ° • | \ /
+        String r1 = "1234567890";
+        String r2 = second ? "^√%_\"'<>≈≠" : "*%{}[]()=/";
+        String r3 = second ? "°•|\\/" : "@-+!?";
 
         Key[] mid = chars(r3, SYM_ALTS, 1.4f);
         Key[] row3 = new Key[mid.length + 2];
@@ -225,7 +220,16 @@ final class Layouts {
         SYM_ALTS.put("?", "¿");
         SYM_ALTS.put("!", "¡");
         SYM_ALTS.put("'", "‘ ’ `");
-        SYM_ALTS.put("%", "‰");
+        SYM_ALTS.put("%", "‰ ₽ $ € £ ¥ ₺");
+        SYM_ALTS.put("+", "±");
+        SYM_ALTS.put("=", "≈ ≠");
+        SYM_ALTS.put("*", "×");
+        SYM_ALTS.put("@", "#");
+        SYM_ALTS.put("(", "<");
+        SYM_ALTS.put(")", ">");
+        SYM_ALTS.put("•", "· ○");
+        SYM_ALTS.put("^", "ˇ");
+        SYM_ALTS.put("°", "′ ″");
         SYM_ALTS.put("。", "…");
     }
 }

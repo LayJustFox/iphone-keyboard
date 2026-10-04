@@ -683,8 +683,8 @@ final class KeyboardView extends View {
             return i;
         }
         float tw = toolW();
-        if (x < tw) return TOOL_CLIP;
-        if (x > getWidth() - tw) return TOOL_SETTINGS;
+        if (x < tw) return TOOL_SETTINGS;
+        if (x > getWidth() - tw) return TOOL_CLIP;
         if (quickClipShown != null) return TOOL_PASTE;
         return -1;
     }
@@ -1295,11 +1295,11 @@ final class KeyboardView extends View {
         int col = alpha(theme.text, a * (theme.dark ? 0.8f : 0.6f));
         if (pressedStrip == TOOL_CLIP || pressedStrip == TOOL_SETTINGS) {
             fill.setColor(alpha(theme.highlight, a));
-            float cx = pressedStrip == TOOL_CLIP ? tw / 2 : getWidth() - tw / 2;
+            float cx = pressedStrip == TOOL_SETTINGS ? tw / 2 : getWidth() - tw / 2;
             c.drawCircle(cx, cy, Math.min(m.stripH * 0.42f, dp(19)), fill);
         }
-        drawClipboardIcon(c, tw / 2, cy, col);
-        drawSlidersIcon(c, getWidth() - tw / 2, cy, col);
+        drawSlidersIcon(c, tw / 2, cy, col);          // settings on the left
+        drawClipboardIcon(c, getWidth() - tw / 2, cy, col); // clipboard on the right
         if (quickClipShown != null) {
             text.setTypeface(Typeface.DEFAULT);
             text.setTextSize(dp(14));

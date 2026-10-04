@@ -10,8 +10,8 @@ android {
         applicationId 'com.iphonekb'
         minSdk 26
         targetSdk 34
-        versionCode 11
-        versionName "4.1"
+        versionCode 12
+        versionName "4.2"
     }
 
     // The key lives in the repo so every build (GitHub or Android Studio)

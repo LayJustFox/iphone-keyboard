@@ -558,7 +558,7 @@ public final class SettingsActivity extends Activity implements KeyboardView.Lis
         LinearLayout col = column();
         LinearLayout g = group(col, null);
         switchRow(g, "История буфера обмена", "clipboard", prefs.clipboard);
-        footer(col, "Кнопка 📋 над клавиатурой открывает историю: нажмите, чтобы вставить; "
+        footer(col, "Кнопка 📋 справа над клавиатурой открывает историю: нажмите, чтобы вставить; "
                 + "удерживайте, чтобы закрепить или удалить; 🔍 — поиск.");
         LinearLayout size = group(col, "Сколько хранить");
         String[] labels = new String[Prefs.CLIP_SIZES.length];
